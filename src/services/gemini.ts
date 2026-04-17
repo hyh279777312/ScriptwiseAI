@@ -39,8 +39,9 @@ export interface AnalysisResult {
 // Analysis: Gemini 3.1 Pro Preview (Member Quota)
 // Image Generation: Nano Banana series (2.5 Regular / 3.1 High Quality)
 
-export async function analyzeScript(script: string, referenceImages?: string[]): Promise<AnalysisResult> {
+export async function analyzeScript(script: string, referenceImages?: string[], customApiKey?: string): Promise<AnalysisResult> {
   const model = "gemini-3.1-pro-preview"; // Using the best available Pro model for analysis
+  const currentAi = customApiKey ? new GoogleGenAI({ apiKey: customApiKey }) : ai;
   
   const contentParts: any[] = [
     { text: `
@@ -71,7 +72,7 @@ export async function analyzeScript(script: string, referenceImages?: string[]):
   }
 
   const callModel = async (modelName: string) => {
-    return await ai.models.generateContent({
+    return await currentAi.models.generateContent({
       model: modelName,
       contents: { parts: contentParts },
       config: {
@@ -225,18 +226,44 @@ export async function generateComfyUIFrame(
   workflowStr: string,
   promptNodeId: string,
   description: string,
-  globalStyle?: string
+  globalStyle?: string,
+  isBatchMode: boolean = false
 ): Promise<string[]> {
   const workflow = JSON.parse(workflowStr);
-  const fullPrompt = globalStyle ? `${description}, ${globalStyle}` : description;
+  let fullPrompt = globalStyle ? `${description}, ${globalStyle}` : description;
 
-  if (workflow[promptNodeId] && workflow[promptNodeId].inputs) {
-    const inputs = workflow[promptNodeId].inputs;
-    if (inputs.text !== undefined) inputs.text = fullPrompt;
-    else if (inputs.prompt !== undefined) inputs.prompt = fullPrompt;
-    else if (inputs.string !== undefined) inputs.string = fullPrompt;
-    else if (inputs.prompt_strings !== undefined) inputs.prompt_strings = fullPrompt;
-    else if (inputs.text_b !== undefined) inputs.text_b = fullPrompt;
+  if (!isBatchMode) {
+    // Strip line breaks for single generations to prevent string splitters from batching
+    fullPrompt = fullPrompt.replace(/\r\n|\n|\r/g, ', ');
+  }
+
+  // Auto-traverse to find the root text provision node if the provided node relies on links
+  let targetNodeId = String(promptNodeId);
+  let maxDepth = 5;
+  while (maxDepth > 0) {
+    const inputs = workflow[targetNodeId]?.inputs;
+    if (!inputs) break;
+    
+    let foundLink = false;
+    const textKeys = ['text', 'prompt', 'string', 'prompt_strings', 'text_b', 'text_g', 'text_l'];
+    for (const key of textKeys) {
+      if (Array.isArray(inputs[key])) { 
+        targetNodeId = String(inputs[key][0]);
+        foundLink = true;
+        break;
+      }
+    }
+    if (!foundLink) break;
+    maxDepth--;
+  }
+
+  if (workflow[targetNodeId] && workflow[targetNodeId].inputs) {
+    const inputs = workflow[targetNodeId].inputs;
+    if (inputs.text !== undefined && !Array.isArray(inputs.text)) inputs.text = fullPrompt;
+    else if (inputs.prompt !== undefined && !Array.isArray(inputs.prompt)) inputs.prompt = fullPrompt;
+    else if (inputs.string !== undefined && !Array.isArray(inputs.string)) inputs.string = fullPrompt;
+    else if (inputs.prompt_strings !== undefined && !Array.isArray(inputs.prompt_strings)) inputs.prompt_strings = fullPrompt;
+    else if (inputs.text_b !== undefined && !Array.isArray(inputs.text_b)) inputs.text_b = fullPrompt;
     else {
       // Fallback: update the first found string property
       const stringKey = Object.keys(inputs).find(k => typeof inputs[k] === 'string');
@@ -244,13 +271,23 @@ export async function generateComfyUIFrame(
       else inputs.text = fullPrompt;
     }
   } else {
-    throw new Error(`找不到对应的 Prompt Node ID: ${promptNodeId}，请检查 JSON`);
+    throw new Error(`找不到对应的 Prompt Node ID: ${targetNodeId}，请检查 JSON`);
   }
 
-  // Check random seed in common sampler nodes
+  // Check random seed and override outputs length
   for (const key in workflow) {
-    if (workflow[key].class_type === "KSampler" && workflow[key].inputs) {
-      workflow[key].inputs.seed = Math.floor(Math.random() * 1000000000000000);
+    const node = workflow[key];
+    if (!node || !node.inputs) continue;
+    
+    if (node.class_type && node.class_type.includes("Sampler")) {
+      if (node.inputs.seed !== undefined) node.inputs.seed = Math.floor(Math.random() * 1000000000000000);
+      if (node.inputs.noise_seed !== undefined) node.inputs.noise_seed = Math.floor(Math.random() * 1000000000000000);
+    }
+    
+    // Force batch size to 1 if we are explicitly asking for a single image, 
+    // to prevent workflows with hardcoded batch sizes from wasting iterations
+    if (!isBatchMode && node.inputs.batch_size !== undefined) {
+      node.inputs.batch_size = 1;
     }
   }
 
@@ -299,8 +336,10 @@ export async function generateFrameImage(
   isHighQuality: boolean = false,
   globalStyle?: string,
   projectContext?: string,
-  aspectRatio: string = "16:9"
+  aspectRatio: string = "16:9",
+  customApiKey?: string
 ): Promise<string> {
+  const currentAi = customApiKey ? new GoogleGenAI({ apiKey: customApiKey }) : ai;
   // 指定使用最新的 Flash 生图系列 (2.5 / 3.1 预览版)
   const model = isHighQuality ? "gemini-3.1-flash-image-preview" : "gemini-2.5-flash-image";
   
@@ -313,7 +352,7 @@ export async function generateFrameImage(
     生成指令：请根据“项目一致性约束”中提到的角色和场景设定，结合“分镜描述”中的动作，以“风格总控”定义的艺术风格生成一张高质量图片。
   `.trim();
   
-  const response = await ai.models.generateContent({
+  const response = await currentAi.models.generateContent({
     model,
     contents: { parts: [{ text: prompt }] },
     config: {
@@ -338,8 +377,10 @@ export async function generateGridImage(
   isHighQuality: boolean = false,
   globalStyle?: string,
   projectContext?: string,
-  aspectRatio: string = "16:9"
+  aspectRatio: string = "16:9",
+  customApiKey?: string
 ): Promise<string> {
+  const currentAi = customApiKey ? new GoogleGenAI({ apiKey: customApiKey }) : ai;
   const model = isHighQuality ? "gemini-3.1-flash-image-preview" : "gemini-2.5-flash-image";
   
   const framesText = frames.map(f => `格 ${f.number}: ${f.description}`).join('\n');
@@ -355,7 +396,7 @@ export async function generateGridImage(
     在每个格子里，请【严格结合“项目一致性约束及资产分析表”中定义的人物外貌特征、服装、关键道具以及场景环境设定】，从左到右、从上到下按顺序绘制上述提到的9个剧情独立画面。确保九张分图中的人物和场景资产具备完全的一致性！
   `.trim();
 
-  const response = await ai.models.generateContent({
+  const response = await currentAi.models.generateContent({
     model,
     contents: { parts: [{ text: prompt }] },
     config: {

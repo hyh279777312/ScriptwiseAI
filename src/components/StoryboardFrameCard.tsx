@@ -20,6 +20,7 @@ interface Props {
     comfyNodeId: string;
     comfyWorkflow: string;
   };
+  customApiKey?: string;
   key?: any;
 }
 
@@ -33,7 +34,8 @@ export function StoryboardFrameCard({
   globalStyle, 
   projectContext,
   aspectRatio,
-  engineConfigs
+  engineConfigs,
+  customApiKey
 }: Props) {
   const [isGenerating, setIsGenerating] = useState(false);
 
@@ -55,11 +57,12 @@ export function StoryboardFrameCard({
             engineConfigs.comfyWorkflow,
             engineConfigs.comfyNodeId,
             frame.visualDescription,
-            globalStyle
+            globalStyle,
+            false // isBatchMode
           );
           url = urls[0];
         } else {
-          url = await generateFrameImage(frame.visualDescription, isHighQuality, globalStyle, projectContext, aspectRatio);
+          url = await generateFrameImage(frame.visualDescription, isHighQuality, globalStyle, projectContext, aspectRatio, customApiKey);
         }
         onGenerateImage(frame.frameNumber, url);
         break; 

@@ -31,7 +31,9 @@ import {
   ChevronLeft,
   LayoutGrid,
   FileText,
-  ListTree
+  ListTree,
+  Eye,
+  EyeOff
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -158,6 +160,8 @@ export default function App() {
   const gridCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isExtractingDoc, setIsExtractingDoc] = useState(false);
   const [rawAnalysisText, setRawAnalysisText] = useState("");
+  const [customApiKey, setCustomApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
 
   const styleOptions = [
     { label: "电影感", value: "电影感镜头, 8k, 高度细节, 电影光效" },
@@ -218,6 +222,23 @@ export default function App() {
     setReferenceImages(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleWorkflowUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        setComfyWorkflow(JSON.stringify(json, null, 2));
+      } catch (err) {
+        alert("JSON 文件解析失败，请确保您上传的是 ComfyUI 导出的 API 格式 JSON 文件。");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = ""; // Reset input
+  };
+
   const onAnalyze = async () => {
     if (!script.trim()) return;
     setIsAnalyzing(true);
@@ -239,7 +260,7 @@ export default function App() {
           setResults(null);
         }
       } else {
-        res = await analyzeScript(script, referenceImages);
+        res = await analyzeScript(script, referenceImages, customApiKey);
         setResults(res);
       }
       setActiveTab("analysis");
@@ -359,7 +380,8 @@ export default function App() {
           comfyWorkflow,
           comfyNodeId,
           combinedPrompt,
-          "" // Style is already combined above
+          "", // Style is already combined above
+          true // isBatchMode
         );
         
         const newImages = { ...frameImages };
@@ -399,7 +421,8 @@ export default function App() {
               comfyWorkflow,
               comfyNodeId,
               frame.visualDescription,
-              customStyle || globalStyle
+              customStyle || globalStyle,
+              false // isBatchMode
             );
             url = urls[0];
           } else {
@@ -408,7 +431,8 @@ export default function App() {
               isHighQuality, 
               customStyle || globalStyle,
               getProjectContext(),
-              aspectRatio
+              aspectRatio,
+              customApiKey
             );
           }
           setFrameImages(prev => ({ ...prev, [frame.frameNumber]: url }));
@@ -465,7 +489,7 @@ export default function App() {
       }));
 
       const combinedStyle = customStyle ? `${globalStyle}, ${customStyle}` : globalStyle;
-      const url = await generateGridImage(frameData, isHighQuality, combinedStyle, getProjectContext(), aspectRatio);
+      const url = await generateGridImage(frameData, isHighQuality, combinedStyle, getProjectContext(), aspectRatio, customApiKey);
 
       setGridImageUrls(prev => ({ ...prev, [gridPage]: [url, ...(prev[gridPage] || [])] }));
     } catch (error) {
@@ -510,11 +534,11 @@ export default function App() {
 
       <main className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-[300px] bg-[var(--surface)] border-r border-[var(--border)] flex flex-col p-4 gap-6 overflow-y-auto custom-scrollbar flex-shrink-0">
+        <aside className="w-[360px] bg-[var(--surface)] border-r border-[var(--border)] flex flex-col p-4 gap-6 overflow-y-auto custom-scrollbar flex-shrink-0">
           <div>
-            <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex justify-between">
+            <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex justify-between">
               <span>输入剧本/梗概</span>
-              {isExtractingDoc && <span className="opacity-70 animate-pulse text-[8px] mt-0.5">解析中...</span>}
+              {isExtractingDoc && <span className="opacity-70 animate-pulse text-[10px] mt-0.5">解析中...</span>}
             </div>
             <div 
               onDragOver={(e) => e.preventDefault()}
@@ -526,7 +550,7 @@ export default function App() {
                 onChange={(e) => setScript(e.target.value)}
                 placeholder="在这里输入您的故事脚本，或拖拽 txt/md/pdf/docx 文档至此..."
                 disabled={isExtractingDoc}
-                className="w-full h-40 bg-[#111] border border-[var(--border)] rounded p-3 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors resize-none font-sans leading-relaxed disabled:opacity-50"
+                className="w-full h-48 bg-[#111] border border-[var(--border)] rounded p-3 text-sm text-white outline-none focus:border-[var(--accent)] transition-colors resize-none font-sans leading-relaxed disabled:opacity-50"
               />
             </div>
           </div>
@@ -535,7 +559,7 @@ export default function App() {
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleImageDrop}
           >
-            <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2">视觉参考图 <span className="text-[8px] opacity-40 font-normal">(支持拖拽)</span></div>
+            <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2">视觉参考图 <span className="text-[10px] opacity-40 font-normal">(支持拖拽)</span></div>
             <div className="grid grid-cols-3 gap-2 mb-3">
               {referenceImages.map((img, i) => (
                 <div key={i} className="relative aspect-square rounded border border-[var(--border)] overflow-hidden group">
@@ -566,15 +590,15 @@ export default function App() {
           </div>
 
           <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded">
-            <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">生成艺术风格</div>
-            <div className="grid grid-cols-2 gap-1.5 mb-3">
+            <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">生成艺术风格</div>
+            <div className="grid grid-cols-2 gap-2 mb-3">
               {styleOptions.map((opt) => (
                 <button
                   key={opt.label}
                   onClick={() => {
                     setGlobalStyle(opt.value);
                   }}
-                  className={`text-[9px] py-1 border rounded transition-all font-mono uppercase ${
+                  className={`text-xs py-1.5 border rounded transition-all font-mono uppercase ${
                     globalStyle === opt.value
                       ? "bg-[var(--accent)] text-black border-[var(--accent)] font-bold"
                       : "bg-[#111] text-[var(--text-dim)] border-[var(--border)] hover:border-[var(--text-dim)]"
@@ -585,25 +609,25 @@ export default function App() {
               ))}
             </div>
             <div className="space-y-1">
-              <div className="text-[8px] uppercase font-bold text-white opacity-40">自定义风格关键词</div>
+              <div className="text-[10px] uppercase font-bold text-white opacity-40">自定义风格关键词</div>
               <input
                 type="text"
                 value={customStyle}
                 onChange={(e) => setCustomStyle(e.target.value)}
                 placeholder="例如: 赛博朋克, 高对比度..."
-                className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-[10px] text-white outline-none focus:border-[var(--accent)]"
+                className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)]"
               />
             </div>
           </div>
 
           <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded">
-            <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">画面长宽比</div>
-            <div className="flex flex-wrap gap-1.5 mb-3">
+            <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">画面长宽比</div>
+            <div className="flex flex-wrap gap-2 mb-3">
               {aspectRatios.map((ar) => (
                 <button
                   key={ar.label}
                   onClick={() => setAspectRatio(ar.value)}
-                  className={`text-[9px] py-1 px-2 border rounded transition-all font-mono uppercase flex-1 whitespace-nowrap ${
+                  className={`text-xs py-1.5 px-2 border rounded transition-all font-mono uppercase flex-1 whitespace-nowrap ${
                     aspectRatio === ar.value
                       ? "bg-[var(--accent)] text-black border-[var(--accent)] font-bold"
                       : "bg-[#111] text-[var(--text-dim)] border-[var(--border)] hover:border-[var(--text-dim)]"
@@ -616,33 +640,33 @@ export default function App() {
           </div>
 
           <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded mt-4">
-            <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">工作流引擎配置</div>
+            <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">工作流引擎配置</div>
             
             {/* Analysis Engine Config */}
             <div className="mb-4">
-              <div className="text-[9px] text-[var(--text-dim)] uppercase font-mono tracking-widest mb-1.5 flex items-center gap-1">
-                <Send className="w-2.5 h-2.5" />
+              <div className="text-[10px] text-[var(--text-dim)] uppercase font-mono tracking-widest mb-1.5 flex items-center gap-1">
+                <Send className="w-3 h-3" />
                 1. 智能分析引擎 (分镜转换)
               </div>
               <div className="flex gap-2 mb-2">
                 <label className="flex items-center gap-1.5 cursor-pointer">
                   <input type="radio" name="analysis_engine" value="gemini" checked={analysisEngine === "gemini"} onChange={() => setAnalysisEngine("gemini")} className="accent-[var(--accent)]" />
-                  <span className="text-[10px] text-white">Gemini 2.5 Pro</span>
+                  <span className="text-xs text-white">Gemini 2.5 Pro</span>
                 </label>
                 <label className="flex items-center gap-1.5 cursor-pointer">
                   <input type="radio" name="analysis_engine" value="ollama" checked={analysisEngine === "ollama"} onChange={() => setAnalysisEngine("ollama")} className="accent-[var(--accent)]" />
-                  <span className="text-[10px] text-[var(--accent)]">本地 Ollama (大模型)</span>
+                  <span className="text-xs text-[var(--accent)]">本地 Ollama (大模型)</span>
                 </label>
               </div>
               {analysisEngine === "ollama" && (
                 <div className="space-y-2 p-2 bg-[#2a2c31] border border-[var(--border)] rounded mb-3">
                   <div>
-                    <label className="text-[8px] uppercase font-bold text-white opacity-60">API 地址</label>
-                    <input type="text" value={analysisOllamaUrl} onChange={(e) => setAnalysisOllamaUrl(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
+                    <label className="text-[10px] uppercase font-bold text-white opacity-60">API 地址</label>
+                    <input type="text" value={analysisOllamaUrl} onChange={(e) => setAnalysisOllamaUrl(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 mt-1 text-xs text-white outline-none focus:border-[var(--accent)]" />
                   </div>
                   <div>
-                    <label className="text-[8px] uppercase font-bold text-white opacity-60">模型名称 (Model)</label>
-                    <input type="text" value={analysisOllamaModel} onChange={(e) => setAnalysisOllamaModel(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
+                    <label className="text-[10px] uppercase font-bold text-white opacity-60">模型名称 (Model)</label>
+                    <input type="text" value={analysisOllamaModel} onChange={(e) => setAnalysisOllamaModel(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 mt-1 text-xs text-white outline-none focus:border-[var(--accent)]" />
                   </div>
                 </div>
               )}
@@ -650,8 +674,8 @@ export default function App() {
 
             {/* Image Gen Engine Config */}
             <div>
-              <div className="text-[9px] text-[var(--text-dim)] uppercase font-mono tracking-widest mb-1.5 flex items-center gap-1">
-                <ImageIcon className="w-2.5 h-2.5" />
+              <div className="text-[10px] text-[var(--text-dim)] uppercase font-mono tracking-widest mb-1.5 flex items-center gap-1">
+                <ImageIcon className="w-3 h-3" />
                 2. 画面生成引擎 (剧照渲染)
               </div>
               <div className="flex gap-2 mb-2">
@@ -664,7 +688,7 @@ export default function App() {
                     onChange={() => setSelectedEngine("gemini")}
                     className="accent-[var(--accent)]"
                   />
-                  <span className="text-[10px] text-white">Google Gemini (推荐)</span>
+                  <span className="text-xs text-white">Google Gemini (推荐)</span>
                 </label>
                 <label className="flex items-center gap-1.5 cursor-pointer">
                   <input 
@@ -675,56 +699,66 @@ export default function App() {
                     onChange={() => setSelectedEngine("comfyui")}
                     className="accent-[var(--accent)]"
                   />
-                  <span className="text-[10px] text-[var(--accent)]">本地 ComfyUI</span>
+                  <span className="text-xs text-[var(--accent)]">本地 ComfyUI</span>
                 </label>
               </div>
 
               {selectedEngine === "comfyui" && (
                 <div className="space-y-2 mt-3 p-2 bg-[#2a2c31] border border-[var(--border)] rounded">
                   <div>
-                    <label className="text-[8px] uppercase font-bold text-white opacity-60">API 地址 (需开启 --listen)</label>
+                    <label className="text-[10px] uppercase font-bold text-white opacity-60">API 地址 (需开启 --listen)</label>
                     <input
                       type="text"
                       value={comfyUrl}
                       onChange={(e) => setComfyUrl(e.target.value)}
-                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
+                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 mt-1 text-xs text-white outline-none focus:border-[var(--accent)]"
                     />
                   </div>
                   <div>
-                    <label className="text-[8px] uppercase font-bold text-white opacity-60">提示词 Node ID (CLIPTextEncode)</label>
+                    <label className="text-[10px] uppercase font-bold text-white opacity-60">提示词 Node ID (CLIPTextEncode)</label>
                     <input
                       type="text"
                       value={comfyNodeId}
                       onChange={(e) => setComfyNodeId(e.target.value)}
-                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
+                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 mt-1 text-xs text-white outline-none focus:border-[var(--accent)]"
                     />
                   </div>
                   <div>
-                    <label className="text-[8px] uppercase font-bold text-white opacity-60">完整 Workflow (API Format)</label>
-                    <textarea
-                      value={comfyWorkflow}
-                      onChange={(e) => setComfyWorkflow(e.target.value)}
-                      className="w-full h-20 bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[8px] text-white outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar"
-                    />
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] uppercase font-bold text-white opacity-60">完整 Workflow (API JSON)</label>
+                      <label className="text-[10px] bg-[#111] hover:bg-[var(--accent)] hover:text-black transition-colors border border-[var(--border)] rounded px-2 py-1 cursor-pointer text-[var(--accent)] font-bold">
+                        加载文件...
+                        <input type="file" accept=".json" className="hidden" onChange={handleWorkflowUpload} />
+                      </label>
+                    </div>
+                    <div className="mt-1 relative group">
+                      <div className="absolute inset-0 bg-gradient-to-t from-[#111] via-transparent to-transparent pointer-events-none rounded"></div>
+                      <textarea
+                        value={comfyWorkflow}
+                        onChange={(e) => setComfyWorkflow(e.target.value)}
+                        className="w-full h-20 bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-[10px] text-[var(--text-dim)] outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar opacity-70 group-hover:opacity-100 transition-opacity"
+                        placeholder="也可以直接粘贴被导出的 ComfyUI API JSON 工作流代码..."
+                      />
+                    </div>
                   </div>
                   
                   <div className="mt-2 pt-2 border-t border-[var(--border)] border-dashed">
                     <label className="flex items-center justify-between cursor-pointer group">
-                      <span className="text-[8px] uppercase font-bold text-[var(--accent)] tracking-widest group-hover:text-white transition-colors">开启列表节点批量模式</span>
+                      <span className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-widest group-hover:text-white transition-colors">开启列表节点批量模式</span>
                       <input 
                         type="checkbox" 
                         checked={comfyBatchMode} 
                         onChange={(e) => setComfyBatchMode(e.target.checked)}
-                        className="w-3 h-3 accent-[var(--accent)] cursor-pointer"
+                        className="w-3.5 h-3.5 accent-[var(--accent)] cursor-pointer"
                       />
                     </label>
                     {comfyBatchMode && (
-                      <div className="mt-2 text-[8px]">
-                         <div className="flex items-center justify-between opacity-80">
+                      <div className="mt-2 text-[10px]">
+                         <div className="flex items-center justify-between opacity-80 mb-1.5">
                            <span>多文本提示词分隔符:</span>
-                           <input type="text" value={comfyBatchSeparator} onChange={(e) => setComfyBatchSeparator(e.target.value)} className="bg-[#111] text-center border border-[var(--border)] rounded px-1 min-w-[40px] text-white outline-none" />
+                           <input type="text" value={comfyBatchSeparator} onChange={(e) => setComfyBatchSeparator(e.target.value)} className="bg-[#111] text-center border border-[var(--border)] rounded px-1.5 py-0.5 min-w-[50px] text-white outline-none text-[10px]" />
                          </div>
-                         <div className="text-[7px] text-[var(--text-dim)] mt-1.5 leading-tight">通过批量生成可将所有缺失图像的提示词组合发送给 Node，实现一次输出多图（需节点支持，如 easy promptList）。请确保你的 Node ID（上方）指向的是支持字符串划分的提示词列表节点。</div>
+                         <div className="text-[9px] text-[var(--text-dim)] mt-1.5 leading-relaxed">通过批量生成可将所有缺失图像的提示词组合发送给 Node，实现一次输出多图（需节点支持，如 easy promptList）。请确保你的 Node ID（上方）指向的是支持字符串划分的提示词列表节点。</div>
                       </div>
                     )}
                   </div>
@@ -732,8 +766,8 @@ export default function App() {
               )}
             </div>
 
-            <div className="text-[9px] uppercase font-bold text-white tracking-widest mb-2 mt-4 pt-4 border-t border-[var(--border)]">渲染参数</div>
-            <div className="space-y-1.5 font-mono text-[9px] text-[var(--text-dim)]">
+            <div className="text-[10px] uppercase font-bold text-white tracking-widest mb-2 mt-4 pt-4 border-t border-[var(--border)]">渲染参数</div>
+            <div className="space-y-2 font-mono text-[10px] text-[var(--text-dim)]">
               <div className="flex justify-between"><span>布局模式</span><span className="text-white">智能自动</span></div>
               <div className="flex justify-between"><span>提示词权重</span><span className="text-white">0.85</span></div>
               <div className="flex justify-between"><span>采样算法</span><span className="text-white">Cinematic</span></div>
@@ -741,34 +775,46 @@ export default function App() {
             
             <div className="mt-4 pt-4 border-t border-[var(--border)]">
               <label className="flex items-center justify-between cursor-pointer group">
-                <span className="text-[9px] uppercase font-bold text-white tracking-widest group-hover:text-[var(--accent)] transition-colors">高清生图模式 (HQ)</span>
+                <span className="text-[10px] uppercase font-bold text-white tracking-widest group-hover:text-[var(--accent)] transition-colors">高清生图模式 (HQ)</span>
                 <input 
                   type="checkbox" 
                   checked={isHighQuality} 
                   onChange={(e) => setIsHighQuality(e.target.checked)}
-                  className="w-3 h-3 accent-[var(--accent)] cursor-pointer"
+                  className="w-3.5 h-3.5 accent-[var(--accent)] cursor-pointer"
                 />
               </label>
-              <div className="text-[7px] text-[var(--text-dim)] mt-1 font-mono uppercase">使用 Nano Banana 2 图像核心</div>
+              <div className="text-[9px] text-[var(--text-dim)] mt-1.5 font-mono uppercase">使用 Nano Banana 2 图像核心</div>
             </div>
 
-            <div className="mt-3 p-2 bg-blue-500/10 border border-blue-500/20 rounded mb-4">
-              <div className="text-[8px] font-bold text-blue-400 uppercase mb-1 flex items-center gap-1">
-                <Sparkles className="w-2 h-2" /> 配额提示
+            <div className="mt-3 p-2.5 bg-[#1a1c1f] border border-[var(--border)] rounded mb-4">
+              <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex items-center gap-1.5 hover:text-white transition-colors cursor-help" title="用于 Gemini Pro 分离生图与提示词分析。如果遇到 429 报错，请在此处覆盖平台配置。">
+                <Sparkles className="w-3 h-3" /> 自定义 API Key
               </div>
-              <p className="text-[7px] text-blue-300/70 font-mono leading-tight">
-                如果遇到 429 错误，请在页面右上角选择您的个人 API Key (Member Quota) 以关联 Gemini Pro 会员权益。
-              </p>
+              <div className="relative group">
+                <input
+                  type={showApiKey ? "text" : "password"}
+                  value={customApiKey}
+                  onChange={(e) => setCustomApiKey(e.target.value)}
+                  placeholder="Paste your Gemini API Key here..."
+                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] font-mono transition-colors pr-8 placeholder:text-gray-600"
+                />
+                <button
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-[var(--accent)] transition-colors p-0.5"
+                >
+                  {showApiKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                </button>
+              </div>
             </div>
           </div>
             
           <button
             onClick={onAnalyze}
             disabled={isAnalyzing || !script.trim()}
-            className="w-full py-2.5 bg-[var(--accent)] text-black rounded font-bold text-xs uppercase tracking-widest hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-auto"
+            className="w-full py-3 bg-[var(--accent)] text-black rounded font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-auto"
           >
             {isAnalyzing ? (
-              <Loader2 className="w-4 h-4 animate-spin mx-auto" />
+              <Loader2 className="w-5 h-5 animate-spin mx-auto" />
             ) : (
               "开始智能分析"
             )}
@@ -992,6 +1038,7 @@ export default function App() {
                             comfyNodeId,
                             comfyWorkflow
                           }}
+                          customApiKey={customApiKey}
                         />
                       ))}
                     </div>
