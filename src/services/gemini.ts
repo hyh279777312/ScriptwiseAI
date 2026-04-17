@@ -159,15 +159,13 @@ export async function analyzeScript(script: string, referenceImages?: string[]):
 
 // Deduplicated analyzeComfyUIScript removed here
 
-export async function analyzeComfyUIScript(
+export async function analyzeOllamaScript(
   baseUrl: string,
-  workflowStr: string,
-  promptNodeId: string,
-  outputNodeId: string,
+  modelName: string,
   script: string
 ): Promise<{ text: string, parsed: AnalysisResult | null }> {
-  const workflow = JSON.parse(workflowStr);
-  const prompt = `
+  try {
+    const prompt = `
 你是一位专业的导演和分镜师。
 请分析以下故事梗概/剧本，提取角色、场景、道具，并生成一个专业的分镜矩阵。
 
@@ -187,56 +185,38 @@ export async function analyzeComfyUIScript(
 ${script}
 `.trim();
 
-  if (workflow[promptNodeId] && workflow[promptNodeId].inputs) {
-    if (workflow[promptNodeId].inputs.text !== undefined) workflow[promptNodeId].inputs.text = prompt;
-    else if (workflow[promptNodeId].inputs.prompt !== undefined) workflow[promptNodeId].inputs.prompt = prompt;
-  } else {
-    throw new Error(`找不到对应的分析提示词 Node ID: ${promptNodeId}`);
-  }
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: modelName,
+        prompt: prompt,
+        stream: false,
+      }),
+    });
 
-  const res = await fetch(`${baseUrl}/prompt`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: workflow })
-  });
-  
-  if (!res.ok) throw new Error(`ComfyUI 错误: ${res.statusText}`);
-  const { prompt_id } = await res.json();
-
-  while (true) {
-    await new Promise(r => setTimeout(r, 2000));
-    try {
-      const histRes = await fetch(`${baseUrl}/history/${prompt_id}`);
-      if (!histRes.ok) continue;
-      const histData = await histRes.json();
-      
-      if (histData[prompt_id]) {
-        const outputs = histData[prompt_id].outputs;
-        if (outputs[outputNodeId]) {
-          const nodeOut = outputs[outputNodeId];
-          let resultText = nodeOut.text?.[0] || nodeOut.string?.[0] || nodeOut.message?.[0];
-          if (!resultText && Array.isArray(nodeOut)) resultText = nodeOut[0];
-          
-          if (resultText && typeof resultText === "string") {
-            try {
-              const match = resultText.match(/\{[\s\S]*\}/);
-              const jsonStr = match ? match[0] : resultText;
-              const parsed = JSON.parse(jsonStr) as AnalysisResult;
-              return { text: resultText, parsed };
-            } catch (parseError) {
-              // Return raw text if JSON parsing fails
-              return { text: resultText, parsed: null };
-            }
-          } else {
-            throw new Error("无法从输出节点提取文本。");
-          }
-        }
-      }
-    } catch(e) {
-      if (e instanceof Error && (e.message.includes("无法从输出节点提取文本") || e.message.includes("JSON"))) {
-        throw e;
-      }
+    if (!response.ok) {
+      throw new Error(`Ollama 错误: ${response.statusText}`);
     }
+
+    const result = await response.json();
+    const resultText = result.response;
+
+    if (resultText && typeof resultText === "string") {
+      try {
+        const match = resultText.match(/\{[\s\S]*\}/);
+        const jsonStr = match ? match[0] : resultText;
+        const parsed = JSON.parse(jsonStr) as AnalysisResult;
+        return { text: resultText, parsed };
+      } catch (parseError) {
+        // Return raw text if JSON parsing fails
+        return { text: resultText, parsed: null };
+      }
+    } else {
+      throw new Error("Ollama 返回数据格式异常，无法提取文本。");
+    }
+  } catch (err: any) {
+    throw new Error(`本地 Ollama 调用失败: ${err.message || '未知错误'}`);
   }
 }
 

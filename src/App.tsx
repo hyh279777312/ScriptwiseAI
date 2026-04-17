@@ -81,25 +81,9 @@ export default function App() {
   const [aspectRatio, setAspectRatio] = useState("16:9");
   
   // Analysis Engine configurations
-  const [analysisEngine, setAnalysisEngine] = useState<"gemini" | "comfyui">("gemini");
-  const [analysisComfyUrl, setAnalysisComfyUrl] = useState("http://127.0.0.1:8188");
-  const [analysisComfyNodeId, setAnalysisComfyNodeId] = useState("3");
-  const [analysisComfyOutputNodeId, setAnalysisComfyOutputNodeId] = useState("4");
-  const [analysisComfyWorkflow, setAnalysisComfyWorkflow] = useState(`{
-  "3": {
-    "class_type": "OllamaGenerate",
-    "inputs": {
-      "model": "qwen2.5:72b",
-      "prompt": ""
-    }
-  },
-  "4": {
-    "class_type": "SaveText",
-    "inputs": {
-      "text": ["3", 0]
-    }
-  }
-}`);
+  const [analysisEngine, setAnalysisEngine] = useState<"gemini" | "ollama">("gemini");
+  const [analysisOllamaUrl, setAnalysisOllamaUrl] = useState("http://127.0.0.1:11434");
+  const [analysisOllamaModel, setAnalysisOllamaModel] = useState("qwen:latest");
 
   // Image Generation Engine configurations
   const [selectedEngine, setSelectedEngine] = useState<"gemini" | "comfyui">("gemini");
@@ -238,13 +222,11 @@ export default function App() {
     setRawAnalysisText("");
     try {
       let res;
-      if (analysisEngine === "comfyui") {
-        const { analyzeComfyUIScript } = await import("./services/gemini");
-        const analysisResult = await analyzeComfyUIScript(
-          analysisComfyUrl,
-          analysisComfyWorkflow,
-          analysisComfyNodeId,
-          analysisComfyOutputNodeId,
+      if (analysisEngine === "ollama") {
+        const { analyzeOllamaScript } = await import("./services/gemini");
+        const analysisResult = await analyzeOllamaScript(
+          analysisOllamaUrl,
+          analysisOllamaModel,
           script
         );
         if (analysisResult.parsed) {
@@ -606,29 +588,19 @@ export default function App() {
                   <span className="text-[10px] text-white">Gemini 2.5 Pro</span>
                 </label>
                 <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" name="analysis_engine" value="comfyui" checked={analysisEngine === "comfyui"} onChange={() => setAnalysisEngine("comfyui")} className="accent-[var(--accent)]" />
-                  <span className="text-[10px] text-[var(--accent)]">本地大语言模型</span>
+                  <input type="radio" name="analysis_engine" value="ollama" checked={analysisEngine === "ollama"} onChange={() => setAnalysisEngine("ollama")} className="accent-[var(--accent)]" />
+                  <span className="text-[10px] text-[var(--accent)]">本地 Ollama (大模型)</span>
                 </label>
               </div>
-              {analysisEngine === "comfyui" && (
+              {analysisEngine === "ollama" && (
                 <div className="space-y-2 p-2 bg-[#2a2c31] border border-[var(--border)] rounded mb-3">
                   <div>
-                    <label className="text-[8px] uppercase font-bold text-white opacity-60">API 地址 (需开启 --listen)</label>
-                    <input type="text" value={analysisComfyUrl} onChange={(e) => setAnalysisComfyUrl(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[8px] uppercase font-bold text-white opacity-60">提示词 Node ID</label>
-                      <input type="text" value={analysisComfyNodeId} onChange={(e) => setAnalysisComfyNodeId(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
-                    </div>
-                    <div>
-                      <label className="text-[8px] uppercase font-bold text-white opacity-60">结果 Node ID</label>
-                      <input type="text" value={analysisComfyOutputNodeId} onChange={(e) => setAnalysisComfyOutputNodeId(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
-                    </div>
+                    <label className="text-[8px] uppercase font-bold text-white opacity-60">API 地址</label>
+                    <input type="text" value={analysisOllamaUrl} onChange={(e) => setAnalysisOllamaUrl(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
                   </div>
                   <div>
-                    <label className="text-[8px] uppercase font-bold text-white opacity-60">完整 LLM Workflow (API Format)</label>
-                    <textarea value={analysisComfyWorkflow} onChange={(e) => setAnalysisComfyWorkflow(e.target.value)} className="w-full h-12 bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[8px] text-white outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar text-opacity-80" />
+                    <label className="text-[8px] uppercase font-bold text-white opacity-60">模型名称 (Model)</label>
+                    <input type="text" value={analysisOllamaModel} onChange={(e) => setAnalysisOllamaModel(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
                   </div>
                 </div>
               )}
