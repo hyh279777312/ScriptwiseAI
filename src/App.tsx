@@ -542,78 +542,6 @@ export default function App() {
           </div>
 
           <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded">
-            <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">智能分析引擎</div>
-            <div className="flex gap-2 mb-3">
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input 
-                  type="radio" 
-                  name="analysis_engine" 
-                  value="gemini" 
-                  checked={analysisEngine === "gemini"} 
-                  onChange={() => setAnalysisEngine("gemini")}
-                  className="accent-[var(--accent)]"
-                />
-                <span className="text-[10px] text-white">Google Gemini (推荐)</span>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input 
-                  type="radio" 
-                  name="analysis_engine" 
-                  value="comfyui" 
-                  checked={analysisEngine === "comfyui"} 
-                  onChange={() => setAnalysisEngine("comfyui")}
-                  className="accent-[var(--accent)]"
-                />
-                <span className="text-[10px] text-[var(--accent)]">本地 ComfyUI (大模型)</span>
-              </label>
-            </div>
-
-            {analysisEngine === "comfyui" && (
-              <div className="space-y-2 mt-3 p-2 bg-[#2a2c31] border border-[var(--border)] rounded">
-                <div>
-                  <label className="text-[8px] uppercase font-bold text-white opacity-60">API 地址 (需开启 --listen)</label>
-                  <input
-                    type="text"
-                    value={analysisComfyUrl}
-                    onChange={(e) => setAnalysisComfyUrl(e.target.value)}
-                    className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[8px] uppercase font-bold text-white opacity-60">输入 Node ID</label>
-                    <input
-                      type="text"
-                      value={analysisComfyNodeId}
-                      onChange={(e) => setAnalysisComfyNodeId(e.target.value)}
-                      placeholder="Prompt Node (e.g. 3)"
-                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[8px] uppercase font-bold text-white opacity-60">输出 Node ID</label>
-                    <input
-                      type="text"
-                      value={analysisComfyOutputNodeId}
-                      onChange={(e) => setAnalysisComfyOutputNodeId(e.target.value)}
-                      placeholder="Text Output Node (e.g. 4)"
-                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[8px] uppercase font-bold text-white opacity-60">分析 Workflow (API Format)</label>
-                  <textarea
-                    value={analysisComfyWorkflow}
-                    onChange={(e) => setAnalysisComfyWorkflow(e.target.value)}
-                    className="w-full h-20 bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[8px] text-white outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded mt-4">
             <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">生成艺术风格</div>
             <div className="grid grid-cols-2 gap-1.5 mb-3">
               {styleOptions.map((opt) => (
@@ -661,8 +589,10 @@ export default function App() {
                 </button>
               ))}
             </div>
+          </div>
 
-            <div className="text-[10px] uppercase font-bold text-white tracking-[0.2em] mb-2 mt-4 pt-4 border-t border-[var(--border)]">工作流引擎配置</div>
+          <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded mt-4">
+            <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">工作流引擎配置</div>
             
             {/* Analysis Engine Config */}
             <div className="mb-4">
@@ -787,7 +717,7 @@ export default function App() {
               <div className="text-[7px] text-[var(--text-dim)] mt-1 font-mono uppercase">使用 Nano Banana 2 图像核心</div>
             </div>
 
-            <div className="mt-3 p-2 bg-blue-500/10 border border-blue-500/20 rounded">
+            <div className="mt-3 p-2 bg-blue-500/10 border border-blue-500/20 rounded mb-4">
               <div className="text-[8px] font-bold text-blue-400 uppercase mb-1 flex items-center gap-1">
                 <Sparkles className="w-2 h-2" /> 配额提示
               </div>
@@ -796,7 +726,7 @@ export default function App() {
               </p>
             </div>
           </div>
-
+            
           <button
             onClick={onAnalyze}
             disabled={isAnalyzing || !script.trim()}
