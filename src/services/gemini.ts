@@ -245,7 +245,7 @@ export async function generateComfyUIFrame(
     if (!inputs) break;
     
     let foundLink = false;
-    const textKeys = ['text', 'prompt', 'string', 'prompt_strings', 'text_b', 'text_g', 'text_l'];
+    const textKeys = ['text', 'prompt', 'string', 'prompt_strings', 'text_b', 'text_g', 'text_l', 'positive', 'cond', 'conditioning', 'value'];
     for (const key of textKeys) {
       if (Array.isArray(inputs[key])) { 
         targetNodeId = String(inputs[key][0]);
@@ -264,11 +264,26 @@ export async function generateComfyUIFrame(
     else if (inputs.string !== undefined && !Array.isArray(inputs.string)) inputs.string = fullPrompt;
     else if (inputs.prompt_strings !== undefined && !Array.isArray(inputs.prompt_strings)) inputs.prompt_strings = fullPrompt;
     else if (inputs.text_b !== undefined && !Array.isArray(inputs.text_b)) inputs.text_b = fullPrompt;
+    else if (inputs.value !== undefined && typeof inputs.value === 'string') inputs.value = fullPrompt;
     else {
-      // Fallback: update the first found string property
-      const stringKey = Object.keys(inputs).find(k => typeof inputs[k] === 'string');
-      if (stringKey) inputs[stringKey] = fullPrompt;
-      else inputs.text = fullPrompt;
+      // Fallback: scan all nodes to find a CLIPTextEncode or similar text provider
+      let foundAlternative = false;
+      for (const key in workflow) {
+        if (workflow[key]?.class_type?.includes('CLIPTextEncode')) {
+          const altInputs = workflow[key].inputs;
+          if (altInputs && altInputs.text !== undefined && !Array.isArray(altInputs.text)) {
+            altInputs.text = fullPrompt;
+            foundAlternative = true;
+            break;
+          }
+        }
+      }
+      if (!foundAlternative) {
+         // Deep fallback on original target string key (could be filename_prefix, but risky)
+         const stringKey = Object.keys(inputs).find(k => typeof inputs[k] === 'string' && k !== 'filename_prefix');
+         if (stringKey) inputs[stringKey] = fullPrompt;
+         else inputs.text = fullPrompt;
+      }
     }
   } else {
     throw new Error(`找不到对应的 Prompt Node ID: ${targetNodeId}，请检查 JSON`);
@@ -286,7 +301,7 @@ export async function generateComfyUIFrame(
     
     // Force batch size to 1 if we are explicitly asking for a single image, 
     // to prevent workflows with hardcoded batch sizes from wasting iterations
-    if (!isBatchMode && node.inputs.batch_size !== undefined) {
+    if (!isBatchMode && node.inputs.batch_size !== undefined && !Array.isArray(node.inputs.batch_size)) {
       node.inputs.batch_size = 1;
     }
   }
@@ -318,12 +333,16 @@ export async function generateComfyUIFrame(
         for (const nodeId in outputs) {
           if (outputs[nodeId].images && outputs[nodeId].images.length > 0) {
             outputs[nodeId].images.forEach((img: any) => {
-              images.push(`${baseUrl.replace(/\/$/, '')}/view?filename=${img.filename}&subfolder=${img.subfolder}&type=${img.type}`);
+              images.push(`${baseUrl.replace(/\/$/, '')}/view?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder || '')}&type=${img.type}`);
             });
           }
         }
         
-        if (images.length > 0) return images;
+        if (images.length > 0) {
+          return images;
+        } else {
+          throw new Error("ComfyUI 执行完成，但没有提取到任何图像输出。请检查工作流中是否包含 SaveImage 节点。");
+        }
       }
     } catch(e) {
        console.error("Polling ComfyUI failed", e);
