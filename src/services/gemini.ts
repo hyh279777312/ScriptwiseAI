@@ -157,6 +157,89 @@ export async function analyzeScript(script: string, referenceImages?: string[]):
   return JSON.parse(response.text) as AnalysisResult;
 }
 
+// Deduplicated analyzeComfyUIScript removed here
+
+export async function analyzeComfyUIScript(
+  baseUrl: string,
+  workflowStr: string,
+  promptNodeId: string,
+  outputNodeId: string,
+  script: string
+): Promise<{ text: string, parsed: AnalysisResult | null }> {
+  const workflow = JSON.parse(workflowStr);
+  const prompt = `
+你是一位专业的导演和分镜师。
+请分析以下故事梗概/剧本，提取角色、场景、道具，并生成一个专业的分镜矩阵。
+
+特别指令：
+1. 所有的输出内容必须使用【中文】。
+2. 不要 1:1 地将一句 VO 映射到一个画面，要细分节奏使用多样的电影构图。
+3. 视觉一致性：根据你自己提取的元数据，极其详尽地描述角色和道具。
+4. 【重要】你的输出必须且只能为纯粹的JSON（不要用Markdown格式），完全匹配以下结构：
+{
+  "characters": [{ "name": "...", "description": "...", "clothing": "...", "makeup": "..." }],
+  "props": [{ "name": "...", "description": "...", "usage": "..." }],
+  "scenes": [{ "name": "...", "setting": "...", "lighting": "...", "atmosphere": "..." }],
+  "storyboard": [{ "frameNumber": 1, "visualDescription": "...", "audioVoiceover": "...", "composition": "..." }]
+}
+
+剧本内容：
+${script}
+`.trim();
+
+  if (workflow[promptNodeId] && workflow[promptNodeId].inputs) {
+    if (workflow[promptNodeId].inputs.text !== undefined) workflow[promptNodeId].inputs.text = prompt;
+    else if (workflow[promptNodeId].inputs.prompt !== undefined) workflow[promptNodeId].inputs.prompt = prompt;
+  } else {
+    throw new Error(`找不到对应的分析提示词 Node ID: ${promptNodeId}`);
+  }
+
+  const res = await fetch(`${baseUrl}/prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: workflow })
+  });
+  
+  if (!res.ok) throw new Error(`ComfyUI 错误: ${res.statusText}`);
+  const { prompt_id } = await res.json();
+
+  while (true) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const histRes = await fetch(`${baseUrl}/history/${prompt_id}`);
+      if (!histRes.ok) continue;
+      const histData = await histRes.json();
+      
+      if (histData[prompt_id]) {
+        const outputs = histData[prompt_id].outputs;
+        if (outputs[outputNodeId]) {
+          const nodeOut = outputs[outputNodeId];
+          let resultText = nodeOut.text?.[0] || nodeOut.string?.[0] || nodeOut.message?.[0];
+          if (!resultText && Array.isArray(nodeOut)) resultText = nodeOut[0];
+          
+          if (resultText && typeof resultText === "string") {
+            try {
+              const match = resultText.match(/\{[\s\S]*\}/);
+              const jsonStr = match ? match[0] : resultText;
+              const parsed = JSON.parse(jsonStr) as AnalysisResult;
+              return { text: resultText, parsed };
+            } catch (parseError) {
+              // Return raw text if JSON parsing fails
+              return { text: resultText, parsed: null };
+            }
+          } else {
+            throw new Error("无法从输出节点提取文本。");
+          }
+        }
+      }
+    } catch(e) {
+      if (e instanceof Error && (e.message.includes("无法从输出节点提取文本") || e.message.includes("JSON"))) {
+        throw e;
+      }
+    }
+  }
+}
+
 export async function generateComfyUIFrame(
   baseUrl: string,
   workflowStr: string,
@@ -168,7 +251,9 @@ export async function generateComfyUIFrame(
   const fullPrompt = `${description}, ${globalStyle || ""}`;
 
   if (workflow[promptNodeId] && workflow[promptNodeId].inputs) {
-    workflow[promptNodeId].inputs.text = fullPrompt;
+    if ('text' in workflow[promptNodeId].inputs) workflow[promptNodeId].inputs.text = fullPrompt;
+    else if ('prompt' in workflow[promptNodeId].inputs) workflow[promptNodeId].inputs.prompt = fullPrompt;
+    else workflow[promptNodeId].inputs.text = fullPrompt;
   } else {
     throw new Error(`找不到对应的 Prompt Node ID: ${promptNodeId}，请检查 JSON`);
   }

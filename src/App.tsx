@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import React, { useState, useRef } from "react";
 import { 
   analyzeScript, 
   AnalysisResult, 
@@ -29,7 +29,9 @@ import {
   Loader2,
   ChevronRight,
   ChevronLeft,
-  LayoutGrid
+  LayoutGrid,
+  FileText,
+  ListTree
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -78,6 +80,27 @@ export default function App() {
   const [customStyle, setCustomStyle] = useState("");
   const [aspectRatio, setAspectRatio] = useState("16:9");
   
+  // Analysis Engine configurations
+  const [analysisEngine, setAnalysisEngine] = useState<"gemini" | "comfyui">("gemini");
+  const [analysisComfyUrl, setAnalysisComfyUrl] = useState("http://127.0.0.1:8188");
+  const [analysisComfyNodeId, setAnalysisComfyNodeId] = useState("3");
+  const [analysisComfyOutputNodeId, setAnalysisComfyOutputNodeId] = useState("4");
+  const [analysisComfyWorkflow, setAnalysisComfyWorkflow] = useState(`{
+  "3": {
+    "class_type": "OllamaGenerate",
+    "inputs": {
+      "model": "qwen2.5:72b",
+      "prompt": ""
+    }
+  },
+  "4": {
+    "class_type": "SaveText",
+    "inputs": {
+      "text": ["3", 0]
+    }
+  }
+}`);
+
   // Image Generation Engine configurations
   const [selectedEngine, setSelectedEngine] = useState<"gemini" | "comfyui">("gemini");
   const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
@@ -148,6 +171,7 @@ export default function App() {
   const [gridImageUrls, setGridImageUrls] = useState<Record<number, string[]>>({});
   const gridCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isExtractingDoc, setIsExtractingDoc] = useState(false);
+  const [rawAnalysisText, setRawAnalysisText] = useState("");
 
   const styleOptions = [
     { label: "电影感", value: "电影感镜头, 8k, 高度细节, 电影光效" },
@@ -183,12 +207,12 @@ export default function App() {
 
   const handleScriptDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    const files = Array.from(e.dataTransfer.files);
+    const files = Array.from(e.dataTransfer.files) as File[];
     if (files.length === 0) return;
     
     setIsExtractingDoc(true);
     try {
-      const texts = await Promise.all(files.map(f => extractTextFromFile(f)));
+      const texts = await Promise.all(files.map((f: File) => extractTextFromFile(f)));
       setScript(prev => prev + (prev ? '\n\n' : '') + texts.join('\n\n'));
     } catch (err) {
       console.error(err);
@@ -200,7 +224,7 @@ export default function App() {
 
   const handleImageDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    const files = Array.from(e.dataTransfer.files);
+    const files = Array.from(e.dataTransfer.files) as File[];
     processImageFiles(files);
   };
 
@@ -211,23 +235,105 @@ export default function App() {
   const onAnalyze = async () => {
     if (!script.trim()) return;
     setIsAnalyzing(true);
+    setRawAnalysisText("");
     try {
-      const res = await analyzeScript(script, referenceImages);
-      setResults(res);
+      let res;
+      if (analysisEngine === "comfyui") {
+        const { analyzeComfyUIScript } = await import("./services/gemini");
+        const analysisResult = await analyzeComfyUIScript(
+          analysisComfyUrl,
+          analysisComfyWorkflow,
+          analysisComfyNodeId,
+          analysisComfyOutputNodeId,
+          script
+        );
+        if (analysisResult.parsed) {
+          res = analysisResult.parsed;
+          setResults(res);
+        } else {
+          setRawAnalysisText(analysisResult.text);
+          setResults(null);
+        }
+      } else {
+        res = await analyzeScript(script, referenceImages);
+        setResults(res);
+      }
       setActiveTab("analysis");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Analysis failed", error);
       const errorMsg = JSON.stringify(error) + String(error);
       if (errorMsg.includes("429")) {
-        alert("额度受限 (429): 当前分析模型的免费额度已耗尽。请在页面右上角选择您的个人 API Key (Member Quota) 以继续使用 Gemini Pro 进行智能分析。");
+        alert("额度受限 (429): 当前分析模型的免费额度已耗尽。请配置有效 API Key。");
       } else if (errorMsg.includes("403")) {
-        alert("权限不足 (403): 请检查 API Key，确保在页面右上角已正确选择了您的个人 API Key (Member Quota)。");
+        alert("权限不足 (403): 请检查 API Key。");
       } else {
-        alert("分析失败，请稍后重试。");
+        alert(`智能剧本分析失败: \n${error?.message || "未知错误，请检查网络或配置"}`);
       }
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  const handleAutoSplit = () => {
+    if (!rawAnalysisText) return;
+    
+    // Default fallback structure
+    const result: AnalysisResult = {
+      characters: [], props: [], scenes: [], storyboard: []
+    };
+
+    // Advanced Rescue: Regex approach to extract frames manually from unstructured markdown/list
+    const frameRegex = /(?:分镜|镜头|第|Frame|Shot)\s*([0-9]+)\s*(?:镜|:|：|>|-)?\s*([\s\S]*?)(?=(?:分镜|镜头|第|Frame|Shot)\s*[0-9]+\s*(?:镜|:|：|>|-)?|$)/gi;
+    let match;
+    let foundFrames = false;
+
+    while ((match = frameRegex.exec(rawAnalysisText)) !== null) {
+      foundFrames = true;
+      const frameNumber = parseInt(match[1]) || (result.storyboard.length + 1);
+      const descChunk = match[2].trim();
+      
+      let visualDesc = descChunk;
+      const visualMatch = descChunk.match(/(?:画面|视觉|内容)[:：]\s*([^\n]+)/i);
+      if (visualMatch) visualDesc = visualMatch[1];
+      
+      visualDesc = visualDesc.replace(/^[\s\S]*?(?:画面|视觉|内容)[:：]/i, '').trim();
+
+      let audioVoiceover = "";
+      const audioMatch = descChunk.match(/(?:声音|旁白|台词|VO)[:：]\s*([^\n]+)/i);
+      if (audioMatch) audioVoiceover = audioMatch[1];
+
+      result.storyboard.push({
+        frameNumber: frameNumber,
+        visualDescription: visualDesc || descChunk.split('\n')[0] || "自动提取画面",
+        audioVoiceover: audioVoiceover,
+        composition: "自动分析构图"
+      });
+    }
+
+    // Secondary Fallback if explicit keywords aren't found
+    if (!foundFrames) {
+      const chunks = rawAnalysisText.split(/\n\s*\n/).filter(c => c.trim().length > 5);
+      chunks.forEach((chunk, idx) => {
+        result.storyboard.push({
+          frameNumber: idx + 1,
+          visualDescription: chunk.trim(),
+          audioVoiceover: "",
+          composition: "智能构图"
+        });
+      });
+    }
+
+    if (result.storyboard.length === 0) {
+      result.storyboard.push({
+        frameNumber: 1,
+        visualDescription: rawAnalysisText.substring(0, 500),
+        audioVoiceover: "",
+        composition: ""
+      });
+    }
+
+    setResults(result);
+    setRawAnalysisText("");
   };
 
   const handleFrameImageGenerated = (frameNumber: number, imageUrl: string) => {
@@ -436,6 +542,78 @@ export default function App() {
           </div>
 
           <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded">
+            <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">智能分析引擎</div>
+            <div className="flex gap-2 mb-3">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input 
+                  type="radio" 
+                  name="analysis_engine" 
+                  value="gemini" 
+                  checked={analysisEngine === "gemini"} 
+                  onChange={() => setAnalysisEngine("gemini")}
+                  className="accent-[var(--accent)]"
+                />
+                <span className="text-[10px] text-white">Google Gemini (推荐)</span>
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input 
+                  type="radio" 
+                  name="analysis_engine" 
+                  value="comfyui" 
+                  checked={analysisEngine === "comfyui"} 
+                  onChange={() => setAnalysisEngine("comfyui")}
+                  className="accent-[var(--accent)]"
+                />
+                <span className="text-[10px] text-[var(--accent)]">本地 ComfyUI (大模型)</span>
+              </label>
+            </div>
+
+            {analysisEngine === "comfyui" && (
+              <div className="space-y-2 mt-3 p-2 bg-[#2a2c31] border border-[var(--border)] rounded">
+                <div>
+                  <label className="text-[8px] uppercase font-bold text-white opacity-60">API 地址 (需开启 --listen)</label>
+                  <input
+                    type="text"
+                    value={analysisComfyUrl}
+                    onChange={(e) => setAnalysisComfyUrl(e.target.value)}
+                    className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[8px] uppercase font-bold text-white opacity-60">输入 Node ID</label>
+                    <input
+                      type="text"
+                      value={analysisComfyNodeId}
+                      onChange={(e) => setAnalysisComfyNodeId(e.target.value)}
+                      placeholder="Prompt Node (e.g. 3)"
+                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[8px] uppercase font-bold text-white opacity-60">输出 Node ID</label>
+                    <input
+                      type="text"
+                      value={analysisComfyOutputNodeId}
+                      onChange={(e) => setAnalysisComfyOutputNodeId(e.target.value)}
+                      placeholder="Text Output Node (e.g. 4)"
+                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[8px] uppercase font-bold text-white opacity-60">分析 Workflow (API Format)</label>
+                  <textarea
+                    value={analysisComfyWorkflow}
+                    onChange={(e) => setAnalysisComfyWorkflow(e.target.value)}
+                    className="w-full h-20 bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[8px] text-white outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded mt-4">
             <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">生成艺术风格</div>
             <div className="grid grid-cols-2 gap-1.5 mb-3">
               {styleOptions.map((opt) => (
@@ -484,62 +662,110 @@ export default function App() {
               ))}
             </div>
 
-            <div className="text-[9px] uppercase font-bold text-white tracking-widest mb-2 mt-4 pt-4 border-t border-[var(--border)]">生图引擎</div>
-            <div className="flex gap-2 mb-3">
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input 
-                  type="radio" 
-                  name="engine" 
-                  value="gemini" 
-                  checked={selectedEngine === "gemini"} 
-                  onChange={() => setSelectedEngine("gemini")}
-                  className="accent-[var(--accent)]"
-                />
-                <span className="text-[10px] text-white">Google Gemini (推荐)</span>
-              </label>
-              <label className="flex items-center gap-1.5 cursor-pointer">
-                <input 
-                  type="radio" 
-                  name="engine" 
-                  value="comfyui" 
-                  checked={selectedEngine === "comfyui"} 
-                  onChange={() => setSelectedEngine("comfyui")}
-                  className="accent-[var(--accent)]"
-                />
-                <span className="text-[10px] text-[var(--accent)]">本地 ComfyUI</span>
-              </label>
+            <div className="text-[10px] uppercase font-bold text-white tracking-[0.2em] mb-2 mt-4 pt-4 border-t border-[var(--border)]">工作流引擎配置</div>
+            
+            {/* Analysis Engine Config */}
+            <div className="mb-4">
+              <div className="text-[9px] text-[var(--text-dim)] uppercase font-mono tracking-widest mb-1.5 flex items-center gap-1">
+                <Send className="w-2.5 h-2.5" />
+                1. 智能分析引擎 (分镜转换)
+              </div>
+              <div className="flex gap-2 mb-2">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="analysis_engine" value="gemini" checked={analysisEngine === "gemini"} onChange={() => setAnalysisEngine("gemini")} className="accent-[var(--accent)]" />
+                  <span className="text-[10px] text-white">Gemini 2.5 Pro</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="analysis_engine" value="comfyui" checked={analysisEngine === "comfyui"} onChange={() => setAnalysisEngine("comfyui")} className="accent-[var(--accent)]" />
+                  <span className="text-[10px] text-[var(--accent)]">本地大语言模型</span>
+                </label>
+              </div>
+              {analysisEngine === "comfyui" && (
+                <div className="space-y-2 p-2 bg-[#2a2c31] border border-[var(--border)] rounded mb-3">
+                  <div>
+                    <label className="text-[8px] uppercase font-bold text-white opacity-60">API 地址 (需开启 --listen)</label>
+                    <input type="text" value={analysisComfyUrl} onChange={(e) => setAnalysisComfyUrl(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[8px] uppercase font-bold text-white opacity-60">提示词 Node ID</label>
+                      <input type="text" value={analysisComfyNodeId} onChange={(e) => setAnalysisComfyNodeId(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
+                    </div>
+                    <div>
+                      <label className="text-[8px] uppercase font-bold text-white opacity-60">结果 Node ID</label>
+                      <input type="text" value={analysisComfyOutputNodeId} onChange={(e) => setAnalysisComfyOutputNodeId(e.target.value)} className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[8px] uppercase font-bold text-white opacity-60">完整 LLM Workflow (API Format)</label>
+                    <textarea value={analysisComfyWorkflow} onChange={(e) => setAnalysisComfyWorkflow(e.target.value)} className="w-full h-12 bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[8px] text-white outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar text-opacity-80" />
+                  </div>
+                </div>
+              )}
             </div>
 
-            {selectedEngine === "comfyui" && (
-              <div className="space-y-2 mt-3 p-2 bg-[#2a2c31] border border-[var(--border)] rounded">
-                <div>
-                  <label className="text-[8px] uppercase font-bold text-white opacity-60">API 地址 (需开启 --listen)</label>
-                  <input
-                    type="text"
-                    value={comfyUrl}
-                    onChange={(e) => setComfyUrl(e.target.value)}
-                    className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
-                  />
-                </div>
-                <div>
-                  <label className="text-[8px] uppercase font-bold text-white opacity-60">提示词 Node ID (CLIPTextEncode)</label>
-                  <input
-                    type="text"
-                    value={comfyNodeId}
-                    onChange={(e) => setComfyNodeId(e.target.value)}
-                    className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
-                  />
-                </div>
-                <div>
-                  <label className="text-[8px] uppercase font-bold text-white opacity-60">完整 Workflow (API Format)</label>
-                  <textarea
-                    value={comfyWorkflow}
-                    onChange={(e) => setComfyWorkflow(e.target.value)}
-                    className="w-full h-20 bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[8px] text-white outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar"
-                  />
-                </div>
+            {/* Image Gen Engine Config */}
+            <div>
+              <div className="text-[9px] text-[var(--text-dim)] uppercase font-mono tracking-widest mb-1.5 flex items-center gap-1">
+                <ImageIcon className="w-2.5 h-2.5" />
+                2. 画面生成引擎 (剧照渲染)
               </div>
-            )}
+              <div className="flex gap-2 mb-2">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input 
+                    type="radio" 
+                    name="engine" 
+                    value="gemini" 
+                    checked={selectedEngine === "gemini"} 
+                    onChange={() => setSelectedEngine("gemini")}
+                    className="accent-[var(--accent)]"
+                  />
+                  <span className="text-[10px] text-white">Google Gemini (推荐)</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input 
+                    type="radio" 
+                    name="engine" 
+                    value="comfyui" 
+                    checked={selectedEngine === "comfyui"} 
+                    onChange={() => setSelectedEngine("comfyui")}
+                    className="accent-[var(--accent)]"
+                  />
+                  <span className="text-[10px] text-[var(--accent)]">本地 ComfyUI</span>
+                </label>
+              </div>
+
+              {selectedEngine === "comfyui" && (
+                <div className="space-y-2 mt-3 p-2 bg-[#2a2c31] border border-[var(--border)] rounded">
+                  <div>
+                    <label className="text-[8px] uppercase font-bold text-white opacity-60">API 地址 (需开启 --listen)</label>
+                    <input
+                      type="text"
+                      value={comfyUrl}
+                      onChange={(e) => setComfyUrl(e.target.value)}
+                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[8px] uppercase font-bold text-white opacity-60">提示词 Node ID (CLIPTextEncode)</label>
+                    <input
+                      type="text"
+                      value={comfyNodeId}
+                      onChange={(e) => setComfyNodeId(e.target.value)}
+                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[9px] text-white outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[8px] uppercase font-bold text-white opacity-60">完整 Workflow (API Format)</label>
+                    <textarea
+                      value={comfyWorkflow}
+                      onChange={(e) => setComfyWorkflow(e.target.value)}
+                      className="w-full h-20 bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[8px] text-white outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div className="text-[9px] uppercase font-bold text-white tracking-widest mb-2 mt-4 pt-4 border-t border-[var(--border)]">渲染参数</div>
             <div className="space-y-1.5 font-mono text-[9px] text-[var(--text-dim)]">
@@ -587,7 +813,7 @@ export default function App() {
         {/* Content Area */}
         <div className="flex-1 bg-[var(--bg)] overflow-y-auto p-6 custom-scrollbar">
           <AnimatePresence mode="wait">
-            {!results ? (
+            {!results && !rawAnalysisText ? (
               <motion.div 
                 key="empty"
                 initial={{ opacity: 0 }}
@@ -596,6 +822,32 @@ export default function App() {
               >
                 <LayoutGrid className="w-12 h-12 mb-4 text-[var(--text-dim)]" />
                 <p className="text-sm font-mono uppercase tracking-[0.3em]">等待内容输入处理...</p>
+              </motion.div>
+            ) : rawAnalysisText && !results ? (
+              <motion.div 
+                key="rawText"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="flex flex-col h-full gap-4 max-w-5xl mx-auto"
+              >
+                <div className="bg-[#1a1c1f] border border-[var(--border)] rounded p-6 flex flex-col flex-1 shadow-xl">
+                  <h3 className="text-sm font-bold text-[var(--accent)] uppercase tracking-widest flex items-center gap-2 mb-4">
+                    <FileText className="w-4 h-4" /> 
+                    大语言模型原始文本输出 
+                    <span className="text-[10px] text-[var(--text-dim)] font-normal ml-2">模型未能输出纯净 JSON 格式，请检查或手动拆分</span>
+                  </h3>
+                  <textarea
+                    className="flex-1 w-full bg-[#0a0a0a] border border-[var(--border)] rounded text-[11px] leading-relaxed text-white p-4 font-mono custom-scrollbar resize-none mb-6 outline-none focus:border-[var(--accent)] transition-colors"
+                    value={rawAnalysisText}
+                    onChange={(e) => setRawAnalysisText(e.target.value)}
+                  />
+                  <button
+                    onClick={handleAutoSplit}
+                    className="w-full py-3.5 bg-[var(--accent)] text-black rounded font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all flex items-center justify-center gap-2 shadow-lg shadow-[var(--accent)]/10"
+                  >
+                    <ListTree className="w-4 h-4" /> 一键自动拆分成分镜列表展示
+                  </button>
+                </div>
               </motion.div>
             ) : (
               <motion.div 
