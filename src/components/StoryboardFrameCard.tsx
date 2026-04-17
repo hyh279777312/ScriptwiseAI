@@ -50,13 +50,14 @@ export function StoryboardFrameCard({
       try {
         let url;
         if (engineConfigs?.engine === "comfyui") {
-          url = await generateComfyUIFrame(
+          const urls = await generateComfyUIFrame(
             engineConfigs.comfyUrl,
             engineConfigs.comfyWorkflow,
             engineConfigs.comfyNodeId,
             frame.visualDescription,
             globalStyle
           );
+          url = urls[0];
         } else {
           url = await generateFrameImage(frame.visualDescription, isHighQuality, globalStyle, projectContext, aspectRatio);
         }

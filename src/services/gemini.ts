@@ -226,26 +226,35 @@ export async function generateComfyUIFrame(
   promptNodeId: string,
   description: string,
   globalStyle?: string
-): Promise<string> {
+): Promise<string[]> {
   const workflow = JSON.parse(workflowStr);
-  const fullPrompt = `${description}, ${globalStyle || ""}`;
+  const fullPrompt = globalStyle ? `${description}, ${globalStyle}` : description;
 
   if (workflow[promptNodeId] && workflow[promptNodeId].inputs) {
-    if ('text' in workflow[promptNodeId].inputs) workflow[promptNodeId].inputs.text = fullPrompt;
-    else if ('prompt' in workflow[promptNodeId].inputs) workflow[promptNodeId].inputs.prompt = fullPrompt;
-    else workflow[promptNodeId].inputs.text = fullPrompt;
+    const inputs = workflow[promptNodeId].inputs;
+    if (inputs.text !== undefined) inputs.text = fullPrompt;
+    else if (inputs.prompt !== undefined) inputs.prompt = fullPrompt;
+    else if (inputs.string !== undefined) inputs.string = fullPrompt;
+    else if (inputs.prompt_strings !== undefined) inputs.prompt_strings = fullPrompt;
+    else if (inputs.text_b !== undefined) inputs.text_b = fullPrompt;
+    else {
+      // Fallback: update the first found string property
+      const stringKey = Object.keys(inputs).find(k => typeof inputs[k] === 'string');
+      if (stringKey) inputs[stringKey] = fullPrompt;
+      else inputs.text = fullPrompt;
+    }
   } else {
     throw new Error(`找不到对应的 Prompt Node ID: ${promptNodeId}，请检查 JSON`);
   }
 
-  // Check random seed in common sampler nodes (node 3 is KSampler in default workflow)
+  // Check random seed in common sampler nodes
   for (const key in workflow) {
     if (workflow[key].class_type === "KSampler" && workflow[key].inputs) {
       workflow[key].inputs.seed = Math.floor(Math.random() * 1000000000000000);
     }
   }
 
-  const res = await fetch(`${baseUrl}/prompt`, {
+  const res = await fetch(`${baseUrl.replace(/\/$/, '')}/prompt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt: workflow })
@@ -260,19 +269,24 @@ export async function generateComfyUIFrame(
   while (true) {
     await new Promise(r => setTimeout(r, 2000));
     try {
-      const histRes = await fetch(`${baseUrl}/history/${prompt_id}`);
+      const histRes = await fetch(`${baseUrl.replace(/\/$/, '')}/history/${prompt_id}`);
       if (!histRes.ok) continue;
       const histData = await histRes.json();
       
       if (histData[prompt_id]) {
         const outputs = histData[prompt_id].outputs;
-        // Search through node outputs for images
+        const images: string[] = [];
+        
+        // Collect ALL images from ALL nodes in this generation cycle
         for (const nodeId in outputs) {
           if (outputs[nodeId].images && outputs[nodeId].images.length > 0) {
-            const img = outputs[nodeId].images[0];
-            return `${baseUrl}/view?filename=${img.filename}&subfolder=${img.subfolder}&type=${img.type}`;
+            outputs[nodeId].images.forEach((img: any) => {
+              images.push(`${baseUrl.replace(/\/$/, '')}/view?filename=${img.filename}&subfolder=${img.subfolder}&type=${img.type}`);
+            });
           }
         }
+        
+        if (images.length > 0) return images;
       }
     } catch(e) {
        console.error("Polling ComfyUI failed", e);

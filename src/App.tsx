@@ -89,6 +89,8 @@ export default function App() {
   const [selectedEngine, setSelectedEngine] = useState<"gemini" | "comfyui">("gemini");
   const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
   const [comfyNodeId, setComfyNodeId] = useState("6");
+  const [comfyBatchMode, setComfyBatchMode] = useState(false);
+  const [comfyBatchSeparator, setComfyBatchSeparator] = useState("\\n\\n");
   const [comfyWorkflow, setComfyWorkflow] = useState(`{
   "3": {
     "class_type": "KSampler",
@@ -333,12 +335,51 @@ export default function App() {
 
   const generateAllFrameImages = async () => {
     if (!results || isGeneratingAll) return;
-    setIsGeneratingAll(true);
-    setGenStatus("批量处理中...");
     
     const frames = results.storyboard;
+    const pendingFrames = frames.filter(f => !frameImages[f.frameNumber]);
+    if (pendingFrames.length === 0) return;
+
+    setIsGeneratingAll(true);
+    setGenStatus("准备开始生成...");
     const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+    // -- BATCH MODE EXPERIMENT FOR COMFYUI --
+    if (selectedEngine === "comfyui" && comfyBatchMode) {
+      setGenStatus(`正在批量发送请求到 ComfyUI 队列 (${pendingFrames.length}张图)...`);
+      try {
+        const actualSeparator = comfyBatchSeparator.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+        const combinedPrompt = pendingFrames.map(f => {
+          return customStyle ? `${f.visualDescription}, ${globalStyle}, ${customStyle}` : `${f.visualDescription}, ${globalStyle}`;
+        }).join(actualSeparator);
+
+        const { generateComfyUIFrame } = await import("./services/gemini");
+        const urls = await generateComfyUIFrame(
+          comfyUrl,
+          comfyWorkflow,
+          comfyNodeId,
+          combinedPrompt,
+          "" // Style is already combined above
+        );
+        
+        const newImages = { ...frameImages };
+        urls.forEach((url, i) => {
+          if (pendingFrames[i]) {
+            newImages[pendingFrames[i].frameNumber] = url;
+          }
+        });
+        setFrameImages(newImages);
+      } catch (error) {
+        console.error("Batch generation failed", error);
+        alert(`批量生成失败: ${String(error)}。\n可能原因: 您的 ComfyUI 节点 ID 配置不正确或本地服务不可用。`);
+      } finally {
+        setGenStatus("");
+        setIsGeneratingAll(false);
+      }
+      return;
+    }
+
+    // -- NORMAL 1-by-1 MODE --
     for (let i = 0; i < frames.length; i++) {
       const frame = frames[i];
       if (frameImages[frame.frameNumber]) continue;
@@ -353,13 +394,14 @@ export default function App() {
           let url;
           if (selectedEngine === "comfyui") {
             const { generateComfyUIFrame } = await import("./services/gemini");
-            url = await generateComfyUIFrame(
+            const urls = await generateComfyUIFrame(
               comfyUrl,
               comfyWorkflow,
               comfyNodeId,
               frame.visualDescription,
               customStyle || globalStyle
             );
+            url = urls[0];
           } else {
             url = await generateFrameImage(
               frame.visualDescription, 
@@ -664,6 +706,27 @@ export default function App() {
                       onChange={(e) => setComfyWorkflow(e.target.value)}
                       className="w-full h-20 bg-[#111] border border-[var(--border)] rounded px-2 py-1 mt-1 text-[8px] text-white outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar"
                     />
+                  </div>
+                  
+                  <div className="mt-2 pt-2 border-t border-[var(--border)] border-dashed">
+                    <label className="flex items-center justify-between cursor-pointer group">
+                      <span className="text-[8px] uppercase font-bold text-[var(--accent)] tracking-widest group-hover:text-white transition-colors">开启列表节点批量模式</span>
+                      <input 
+                        type="checkbox" 
+                        checked={comfyBatchMode} 
+                        onChange={(e) => setComfyBatchMode(e.target.checked)}
+                        className="w-3 h-3 accent-[var(--accent)] cursor-pointer"
+                      />
+                    </label>
+                    {comfyBatchMode && (
+                      <div className="mt-2 text-[8px]">
+                         <div className="flex items-center justify-between opacity-80">
+                           <span>多文本提示词分隔符:</span>
+                           <input type="text" value={comfyBatchSeparator} onChange={(e) => setComfyBatchSeparator(e.target.value)} className="bg-[#111] text-center border border-[var(--border)] rounded px-1 min-w-[40px] text-white outline-none" />
+                         </div>
+                         <div className="text-[7px] text-[var(--text-dim)] mt-1.5 leading-tight">通过批量生成可将所有缺失图像的提示词组合发送给 Node，实现一次输出多图（需节点支持，如 easy promptList）。请确保你的 Node ID（上方）指向的是支持字符串划分的提示词列表节点。</div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
