@@ -1,4 +1,6 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth";
+import { auth, logout } from "./services/firebase";
 import { 
   analyzeScript, 
   AnalysisResult, 
@@ -7,7 +9,8 @@ import {
   Character,
   Scene,
   Prop,
-  StoryboardFrame
+  StoryboardFrame,
+  ReferenceImage
 } from "./services/gemini";
 import { 
   Card, 
@@ -16,6 +19,7 @@ import {
 } from "./components/UI";
 import { extractTextFromFile } from "./lib/extract";
 import { StoryboardFrameCard } from "./components/StoryboardFrameCard";
+import { LoginModal } from "./components/LoginModal";
 import { 
   Film, 
   Users, 
@@ -33,17 +37,114 @@ import {
   FileText,
   ListTree,
   Eye,
-  EyeOff
+  EyeOff,
+  User,
+  LogIn,
+  LogOut
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 export default function App() {
   const [script, setScript] = useState("");
-  const [referenceImages, setReferenceImages] = useState<string[]>([]);
+  const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<AnalysisResult | null>(null);
   const [frameImages, setFrameImages] = useState<Record<number, string>>({});
   const [activeTab, setActiveTab] = useState<"analysis" | "storyboard">("analysis");
+  const [generatingMetaImage, setGeneratingMetaImage] = useState<string | null>(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+  
+  // Render Parameters
+  const [layoutMode, setLayoutMode] = useState("智能自动");
+  const [promptWeight, setPromptWeight] = useState("1.0");
+  const [samplerName, setSamplerName] = useState("euler");
+  const [samplingSteps, setSamplingSteps] = useState("10");
+
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+
+  useEffect(() => {
+    let interval: any;
+    if (isAnalyzing) {
+      setAnalysisProgress(0);
+      interval = setInterval(() => {
+        setAnalysisProgress(p => (p < 95 ? p + 1 : p));
+      }, 300);
+    } else {
+      setAnalysisProgress(100);
+      setTimeout(() => setAnalysisProgress(0), 500); // reset after a delay
+    }
+    return () => clearInterval(interval);
+  }, [isAnalyzing]);
+
+  const buildPromptWithLayout = (basePrompt: string) => {
+    return layoutMode !== "智能自动" ? `[${layoutMode}] ${basePrompt}` : basePrompt;
+  };
+
+  const currentSamplerConfig = {
+    promptWeight,
+    samplerName,
+    steps: samplingSteps
+  };
+
+  const generateMetaImage = async (type: 'character' | 'scene' | 'prop', item: any, index: number) => {
+    const key = `${type}-${index}`;
+    setGeneratingMetaImage(key);
+    try {
+      let prompt = "";
+      if (type === 'character') {
+        prompt = `Character Concept Art: ${item.name}. ${item.description}. Wearing: ${item.clothing}. Makeup/Style: ${item.makeup}. Professional character design sheet, neutral background, centered subject, highly detailed.`;
+      } else if (type === 'scene') {
+        prompt = `Environment Concept Art: ${item.name}. Setting: ${item.setting}. Lighting: ${item.lighting}. Atmosphere: ${item.atmosphere}. Establishing shot, cinematic lighting, highly detailed environment design.`;
+      } else if (type === 'prop') {
+        prompt = `Prop Design Concept Art: ${item.name}. Description: ${item.description}. Usage context: ${item.usage}. Clear product shot, isolated on neutral background, highly detailed asset design.`;
+      }
+      
+      prompt = buildPromptWithLayout(prompt);
+
+      let url;
+      if (selectedEngine === "comfyui") {
+        const { generateComfyUIFrame } = await import("./services/gemini");
+        const urls = await generateComfyUIFrame(
+          comfyUrl,
+          comfyWorkflow,
+          comfyNodeId,
+          prompt,
+          customStyle || globalStyle,
+          false,
+          currentSamplerConfig
+        );
+        url = urls[0];
+      } else {
+        url = await generateFrameImage(
+          prompt,
+          isHighQuality,
+          globalStyle,
+          getProjectContext(),
+          "16:9",
+          customApiKey
+        );
+      }
+      
+      setReferenceImages(prev => [...prev, {
+        id: Math.random().toString(36).substring(7),
+        url: url,
+        name: `${item.name} 设定图`
+      }]);
+    } catch (err) {
+      console.error(err);
+      alert(`生成${item.name}的设定图失败: ` + String(err));
+    } finally {
+      setGeneratingMetaImage(null);
+    }
+  };
 
   const updateCharacter = (index: number, field: keyof Character, value: string) => {
     if (!results) return;
@@ -81,6 +182,7 @@ export default function App() {
   const [globalStyle, setGlobalStyle] = useState("Cinematic Movie");
   const [customStyle, setCustomStyle] = useState("");
   const [aspectRatio, setAspectRatio] = useState("16:9");
+  const [resolution, setResolution] = useState("1080P");
   
   // Analysis Engine configurations
   const [analysisEngine, setAnalysisEngine] = useState<"gemini" | "ollama">("gemini");
@@ -173,10 +275,17 @@ export default function App() {
   ];
 
   const aspectRatios = [
+    { label: "21:9", value: "21:9" },
     { label: "16:9", value: "16:9" },
     { label: "4:3", value: "4:3" },
     { label: "9:16", value: "9:16" },
-    { label: "21:9", value: "21:9" },
+  ];
+
+  const resolutions = [
+    { label: "720P", value: "720P" },
+    { label: "960P", value: "960P" },
+    { label: "1080P", value: "1080P" },
+    { label: "2160P", value: "2160P" },
   ];
 
   const handleFileChange = (e: any) => {
@@ -189,7 +298,11 @@ export default function App() {
       if (!file.type.startsWith('image/')) return;
       const reader = new FileReader();
       reader.onloadend = () => {
-        setReferenceImages(prev => [...prev, reader.result as string]);
+        setReferenceImages(prev => [...prev, {
+          id: Math.random().toString(36).substring(7),
+          url: reader.result as string,
+          name: file.name.split('.')[0] || "Ref"
+        }]);
       };
       reader.readAsDataURL(file);
     });
@@ -260,7 +373,7 @@ export default function App() {
           setResults(null);
         }
       } else {
-        res = await analyzeScript(script, referenceImages, customApiKey);
+        res = await analyzeScript(script, referenceImages.map(img => img.url), customApiKey);
         setResults(res);
       }
       setActiveTab("analysis");
@@ -346,12 +459,21 @@ export default function App() {
   };
 
   const getProjectContext = () => {
-    if (!results) return "";
-    return `
-      CHARACTERS: ${results.characters.map(c => `${c.name}(${c.description}, Outfit:${c.clothing})`).join("; ")}
-      EQUIPMENT/PROPS: ${results.props.map(p => `${p.name}(${p.description})`).join("; ")}
-      SCENES: ${results.scenes.map(s => `${s.name}(${s.setting}, ${s.atmosphere})`).join("; ")}
-    `.trim();
+    let baseContext = "";
+    if (results) {
+      baseContext = `
+        CHARACTERS: ${results.characters.map(c => `${c.name}(${c.description}, Outfit:${c.clothing})`).join("; ")}
+        EQUIPMENT/PROPS: ${results.props.map(p => `${p.name}(${p.description})`).join("; ")}
+        SCENES: ${results.scenes.map(s => `${s.name}(${s.setting}, ${s.atmosphere})`).join("; ")}
+      `.trim();
+    }
+    
+    // Add reference image names to enforce consistency if they exist
+    const refNames = referenceImages.map(img => img.name).filter(name => name.trim() !== "Ref" && name.trim() !== "");
+    if (refNames.length > 0) {
+      baseContext += `\nVISUAL EXAMPLES ESTABLISHED (Ensure consistency with these established designs): ${refNames.join(", ")}`;
+    }
+    return baseContext;
   };
 
   const generateAllFrameImages = async () => {
@@ -371,7 +493,8 @@ export default function App() {
       try {
         const actualSeparator = comfyBatchSeparator.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
         const combinedPrompt = pendingFrames.map(f => {
-          return customStyle ? `${f.visualDescription}, ${globalStyle}, ${customStyle}` : `${f.visualDescription}, ${globalStyle}`;
+          const finalDesc = buildPromptWithLayout(f.visualDescription);
+          return customStyle ? `${finalDesc}, ${globalStyle}, ${customStyle}` : `${finalDesc}, ${globalStyle}`;
         }).join(actualSeparator);
 
         const { generateComfyUIFrame } = await import("./services/gemini");
@@ -381,7 +504,8 @@ export default function App() {
           comfyNodeId,
           combinedPrompt,
           "", // Style is already combined above
-          true // isBatchMode
+          true, // isBatchMode
+          currentSamplerConfig
         );
         
         const newImages = { ...frameImages };
@@ -420,14 +544,15 @@ export default function App() {
               comfyUrl,
               comfyWorkflow,
               comfyNodeId,
-              frame.visualDescription,
+              buildPromptWithLayout(frame.visualDescription),
               customStyle || globalStyle,
-              false // isBatchMode
+              false, // isBatchMode
+              currentSamplerConfig
             );
             url = urls[0];
           } else {
             url = await generateFrameImage(
-              frame.visualDescription, 
+              buildPromptWithLayout(frame.visualDescription), 
               isHighQuality, 
               customStyle || globalStyle,
               getProjectContext(),
@@ -507,13 +632,13 @@ export default function App() {
       <header className="h-[56px] bg-[var(--surface)] border-b border-[var(--border)] px-5 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-3">
           <div className="text-[var(--accent)] font-extrabold tracking-wider text-base uppercase">
-            ScriptWise AI <span className="font-light opacity-60">/ Analyzer</span>
+            HACKBUTEER AGAINT <span className="font-light opacity-60">PRO</span>
           </div>
         </div>
         
         <div className="flex items-center gap-4">
-          <div className="font-mono text-[10px] text-[var(--text-dim)] uppercase tracking-tight">
-            PRJ_ID: 2024_VISION | VER: 3.1.0-STABLE
+          <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-tight font-bold">
+            Powered By DevaHoo
           </div>
           {results && (
             <div className="flex bg-[var(--bg)] p-1 rounded border border-[var(--border)]">
@@ -529,14 +654,41 @@ export default function App() {
               />
             </div>
           )}
+          
+          {currentUser ? (
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 bg-[var(--surface)] border border-[var(--border)] px-3 py-1.5 rounded text-xs font-bold mr-1">
+                {currentUser.photoURL ? (
+                  <img src={currentUser.photoURL} alt="Avatar" className="w-4 h-4 rounded-full" />
+                ) : (
+                  <User className="w-3 h-3" />
+                )}
+                <span className="hidden sm:inline max-w-[100px] truncate">{currentUser.displayName || currentUser.email}</span>
+              </div>
+              <button 
+                onClick={() => logout()}
+                className="flex items-center gap-1.5 bg-[#111] border border-[var(--border)] px-2 py-1.5 rounded hover:bg-red-900/40 hover:text-red-400 hover:border-red-900 transition-colors text-[10px] uppercase font-bold text-[var(--text-dim)]"
+              >
+                <LogOut className="w-3 h-3" />
+              </button>
+            </div>
+          ) : (
+            <button 
+              onClick={() => setShowLoginModal(true)}
+              className="flex items-center gap-2 bg-[var(--surface)] border border-[var(--border)] px-3 py-1.5 rounded hover:bg-[var(--bg)] transition-colors text-xs font-bold"
+            >
+              <User className="w-3 h-3" />
+              <span className="hidden sm:inline">登录</span>
+            </button>
+          )}
         </div>
       </header>
 
       <main className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-[360px] bg-[var(--surface)] border-r border-[var(--border)] flex flex-col p-4 gap-6 overflow-y-auto custom-scrollbar flex-shrink-0">
+        <aside className="w-[420px] 2xl:w-[500px] bg-[var(--surface)] border-r border-[var(--border)] flex flex-col p-4 gap-6 overflow-y-auto custom-scrollbar flex-shrink-0">
           <div>
-            <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex justify-between">
+            <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex justify-between">
               <span>输入剧本/梗概</span>
               {isExtractingDoc && <span className="opacity-70 animate-pulse text-[10px] mt-0.5">解析中...</span>}
             </div>
@@ -559,16 +711,30 @@ export default function App() {
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleImageDrop}
           >
-            <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2">视觉参考图 <span className="text-[10px] opacity-40 font-normal">(支持拖拽)</span></div>
+            <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2">视觉参考图 <span className="text-xs opacity-40 font-normal">(支持拖拽)</span></div>
             <div className="grid grid-cols-3 gap-2 mb-3">
               {referenceImages.map((img, i) => (
-                <div key={i} className="relative aspect-square rounded border border-[var(--border)] overflow-hidden group">
-                  <img src={img} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                <div key={img.id} className="relative aspect-square rounded border border-[var(--border)] overflow-hidden group">
+                  <img src={img.url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/80 px-1 py-0.5 text-[8px] text-white truncate text-center opacity-80 group-hover:opacity-0 transition-opacity pointer-events-none">
+                    {img.name}
+                  </div>
+                  <input 
+                    type="text" 
+                    value={img.name}
+                    title={img.name}
+                    onChange={(e) => {
+                      const newRef = [...referenceImages];
+                      newRef[i].name = e.target.value;
+                      setReferenceImages(newRef);
+                    }}
+                    className="absolute bottom-0 left-0 w-full bg-black/80 text-[8px] text-white px-1 py-0.5 text-center outline-none opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
+                  />
                   <button 
                     onClick={() => removeImage(i)}
-                    className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="absolute top-1 right-1 bg-black/60 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                   >
-                    <X className="w-3 h-3 text-white" />
+                    <X className="w-3 h-3 text-white m-[2px]" />
                   </button>
                 </div>
               ))}
@@ -590,7 +756,7 @@ export default function App() {
           </div>
 
           <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded">
-            <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">生成艺术风格</div>
+            <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">生成艺术风格</div>
             <div className="grid grid-cols-2 gap-2 mb-3">
               {styleOptions.map((opt) => (
                 <button
@@ -598,7 +764,7 @@ export default function App() {
                   onClick={() => {
                     setGlobalStyle(opt.value);
                   }}
-                  className={`text-xs py-1.5 border rounded transition-all font-mono uppercase ${
+                  className={`text-sm py-1.5 border rounded transition-all font-mono uppercase ${
                     globalStyle === opt.value
                       ? "bg-[var(--accent)] text-black border-[var(--accent)] font-bold"
                       : "bg-[#111] text-[var(--text-dim)] border-[var(--border)] hover:border-[var(--text-dim)]"
@@ -609,31 +775,49 @@ export default function App() {
               ))}
             </div>
             <div className="space-y-1">
-              <div className="text-[10px] uppercase font-bold text-white opacity-40">自定义风格关键词</div>
+              <div className="text-xs uppercase font-bold text-white opacity-40">自定义风格关键词</div>
               <input
                 type="text"
                 value={customStyle}
                 onChange={(e) => setCustomStyle(e.target.value)}
                 placeholder="例如: 赛博朋克, 高对比度..."
-                className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)]"
+                className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-sm text-white outline-none focus:border-[var(--accent)]"
               />
             </div>
           </div>
 
           <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded">
-            <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">画面长宽比</div>
+            <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">画面设定</div>
+            <div className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide mb-1.5 mt-2">画面长宽比</div>
             <div className="flex flex-wrap gap-2 mb-3">
               {aspectRatios.map((ar) => (
                 <button
                   key={ar.label}
                   onClick={() => setAspectRatio(ar.value)}
-                  className={`text-xs py-1.5 px-2 border rounded transition-all font-mono uppercase flex-1 whitespace-nowrap ${
+                  className={`text-sm py-1.5 px-2 border rounded transition-all font-mono uppercase flex-1 whitespace-nowrap ${
                     aspectRatio === ar.value
                       ? "bg-[var(--accent)] text-black border-[var(--accent)] font-bold"
                       : "bg-[#111] text-[var(--text-dim)] border-[var(--border)] hover:border-[var(--text-dim)]"
                   }`}
                 >
                   {ar.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide mb-1.5 mt-2 border-t border-gray-800 pt-2">分辨率</div>
+            <div className="flex flex-wrap gap-2 mb-1">
+              {resolutions.map((res) => (
+                <button
+                  key={res.label}
+                  onClick={() => setResolution(res.value)}
+                  className={`text-sm py-1.5 px-2 border rounded transition-all font-mono uppercase flex-1 whitespace-nowrap ${
+                    resolution === res.value
+                      ? "bg-[var(--accent)] text-black border-[var(--accent)] font-bold"
+                      : "bg-[#111] text-[var(--text-dim)] border-[var(--border)] hover:border-[var(--text-dim)]"
+                  }`}
+                >
+                  {res.label}
                 </button>
               ))}
             </div>
@@ -736,7 +920,7 @@ export default function App() {
                       <textarea
                         value={comfyWorkflow}
                         onChange={(e) => setComfyWorkflow(e.target.value)}
-                        className="w-full h-20 bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-[10px] text-[var(--text-dim)] outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar opacity-70 group-hover:opacity-100 transition-opacity"
+                        className="w-full h-20 bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-[var(--text-dim)] outline-none focus:border-[var(--accent)] font-mono resize-none custom-scrollbar opacity-70 group-hover:opacity-100 transition-opacity"
                         placeholder="也可以直接粘贴被导出的 ComfyUI API JSON 工作流代码..."
                       />
                     </div>
@@ -744,21 +928,21 @@ export default function App() {
                   
                   <div className="mt-2 pt-2 border-t border-[var(--border)] border-dashed">
                     <label className="flex items-center justify-between cursor-pointer group">
-                      <span className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-widest group-hover:text-white transition-colors">开启列表节点批量模式</span>
+                      <span className="text-xs uppercase font-bold text-[var(--accent)] tracking-widest group-hover:text-white transition-colors">开启列表节点批量模式</span>
                       <input 
                         type="checkbox" 
                         checked={comfyBatchMode} 
                         onChange={(e) => setComfyBatchMode(e.target.checked)}
-                        className="w-3.5 h-3.5 accent-[var(--accent)] cursor-pointer"
+                        className="w-4 h-4 accent-[var(--accent)] cursor-pointer"
                       />
                     </label>
                     {comfyBatchMode && (
-                      <div className="mt-2 text-[10px]">
+                      <div className="mt-2 text-xs">
                          <div className="flex items-center justify-between opacity-80 mb-1.5">
                            <span>多文本提示词分隔符:</span>
-                           <input type="text" value={comfyBatchSeparator} onChange={(e) => setComfyBatchSeparator(e.target.value)} className="bg-[#111] text-center border border-[var(--border)] rounded px-1.5 py-0.5 min-w-[50px] text-white outline-none text-[10px]" />
+                           <input type="text" value={comfyBatchSeparator} onChange={(e) => setComfyBatchSeparator(e.target.value)} className="bg-[#111] text-center border border-[var(--border)] rounded px-1.5 py-0.5 min-w-[50px] text-white outline-none text-xs" />
                          </div>
-                         <div className="text-[9px] text-[var(--text-dim)] mt-1.5 leading-relaxed">通过批量生成可将所有缺失图像的提示词组合发送给 Node，实现一次输出多图（需节点支持，如 easy promptList）。请确保你的 Node ID（上方）指向的是支持字符串划分的提示词列表节点。</div>
+                         <div className="text-[10px] text-[var(--text-dim)] mt-1.5 leading-relaxed">通过批量生成可将所有缺失图像的提示词组合发送给 Node，实现一次输出多图（需节点支持，如 easy promptList）。请确保你的 Node ID（上方）指向的是支持字符串划分的提示词列表节点。</div>
                       </div>
                     )}
                   </div>
@@ -766,28 +950,126 @@ export default function App() {
               )}
             </div>
 
-            <div className="text-[10px] uppercase font-bold text-white tracking-widest mb-2 mt-4 pt-4 border-t border-[var(--border)]">渲染参数</div>
-            <div className="space-y-2 font-mono text-[10px] text-[var(--text-dim)]">
-              <div className="flex justify-between"><span>布局模式</span><span className="text-white">智能自动</span></div>
-              <div className="flex justify-between"><span>提示词权重</span><span className="text-white">0.85</span></div>
-              <div className="flex justify-between"><span>采样算法</span><span className="text-white">Cinematic</span></div>
+            <div className="text-sm uppercase font-bold text-white tracking-widest mb-3 mt-4 pt-4 border-t border-[var(--border)]">渲染参数</div>
+            <div className="space-y-4 font-mono text-xs text-[var(--text-dim)]">
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs"><span>画面景别 (Shot Type)</span></div>
+                <div className="flex gap-2 text-[10px] flex-wrap">
+                  {["智能自动", "远景", "全景", "中景", "近景", "特写"].map(mode => (
+                    <button 
+                      key={mode} 
+                      onClick={() => setLayoutMode(mode)} 
+                      className={`px-2 py-1 rounded border transition-colors ${layoutMode === mode ? 'bg-[var(--accent)] text-black border-[var(--accent)]' : 'bg-[#111] text-white border-[var(--border)] hover:border-[var(--accent)]'}`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+                <input 
+                  type="text" 
+                  value={layoutMode} 
+                  onChange={(e) => setLayoutMode(e.target.value)} 
+                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors mt-1 block" 
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs"><span>采样步数 (Steps)</span></div>
+                <div className="flex gap-2 text-[10px] flex-wrap">
+                  {["10", "15", "20", "25", "30"].map(stepStr => (
+                    <button 
+                      key={stepStr} 
+                      onClick={() => setSamplingSteps(stepStr)} 
+                      className={`px-2 py-1 rounded border transition-colors ${samplingSteps === stepStr ? 'bg-[var(--accent)] text-black border-[var(--accent)]' : 'bg-[#111] text-white border-[var(--border)] hover:border-[var(--accent)]'}`}
+                    >
+                      {stepStr}
+                    </button>
+                  ))}
+                </div>
+                <input 
+                  type="number" 
+                  step="1" 
+                  value={samplingSteps} 
+                  onChange={(e) => setSamplingSteps(e.target.value)} 
+                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors mt-1 block" 
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs"><span>提示词权重 (CFG Scale)</span></div>
+                <div className="flex gap-2 text-[10px] flex-wrap">
+                  {["0.5", "0.7", "0.9", "1.0", "1.2", "1.5", "2.0"].map(weight => (
+                    <button 
+                      key={weight} 
+                      onClick={() => setPromptWeight(weight)} 
+                      className={`px-2 py-1 rounded border transition-colors ${promptWeight === weight ? 'bg-[var(--accent)] text-black border-[var(--accent)]' : 'bg-[#111] text-white border-[var(--border)] hover:border-[var(--accent)]'}`}
+                    >
+                      {weight}
+                    </button>
+                  ))}
+                </div>
+                <input 
+                  type="number" 
+                  step="0.1" 
+                  value={promptWeight} 
+                  onChange={(e) => setPromptWeight(e.target.value)} 
+                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors mt-1 block" 
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs"><span>采样算法 (Sampler)</span></div>
+                <select 
+                  value={samplerName} 
+                  onChange={(e) => setSamplerName(e.target.value)} 
+                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors block"
+                >
+                  <optgroup label="Standard">
+                    <option value="euler">euler</option>
+                    <option value="euler_ancestral">euler_ancestral</option>
+                    <option value="heun">heun</option>
+                    <option value="ddpm">ddpm</option>
+                    <option value="ddim">ddim</option>
+                  </optgroup>
+                  <optgroup label="DPM Variants">
+                    <option value="dpm_2">dpm_2</option>
+                    <option value="dpm_2_ancestral">dpm_2_ancestral</option>
+                    <option value="dpm_fast">dpm_fast</option>
+                    <option value="dpm_adaptive">dpm_adaptive</option>
+                    <option value="dpmpp_2s_ancestral">dpmpp_2s_ancestral</option>
+                    <option value="dpmpp_sde">dpmpp_sde</option>
+                    <option value="dpmpp_sde_gpu">dpmpp_sde_gpu</option>
+                    <option value="dpmpp_2m">dpmpp_2m</option>
+                    <option value="dpmpp_2m_sde">dpmpp_2m_sde</option>
+                    <option value="dpmpp_2m_sde_gpu">dpmpp_2m_sde_gpu</option>
+                    <option value="dpmpp_3m_sde">dpmpp_3m_sde</option>
+                    <option value="dpmpp_3m_sde_gpu">dpmpp_3m_sde_gpu</option>
+                  </optgroup>
+                  <optgroup label="Other">
+                    <option value="lms">lms</option>
+                    <option value="lcm">lcm</option>
+                    <option value="uni_pc">uni_pc</option>
+                    <option value="uni_pc_bh2">uni_pc_bh2</option>
+                  </optgroup>
+                </select>
+              </div>
             </div>
             
             <div className="mt-4 pt-4 border-t border-[var(--border)]">
               <label className="flex items-center justify-between cursor-pointer group">
-                <span className="text-[10px] uppercase font-bold text-white tracking-widest group-hover:text-[var(--accent)] transition-colors">高清生图模式 (HQ)</span>
+                <span className="text-sm uppercase font-bold text-white tracking-widest group-hover:text-[var(--accent)] transition-colors">高清生图模式 (HQ)</span>
                 <input 
                   type="checkbox" 
                   checked={isHighQuality} 
                   onChange={(e) => setIsHighQuality(e.target.checked)}
-                  className="w-3.5 h-3.5 accent-[var(--accent)] cursor-pointer"
+                  className="w-4 h-4 accent-[var(--accent)] cursor-pointer"
                 />
               </label>
-              <div className="text-[9px] text-[var(--text-dim)] mt-1.5 font-mono uppercase">使用 Nano Banana 2 图像核心</div>
+              <div className="text-[10px] text-[var(--text-dim)] mt-1.5 font-mono uppercase">使用 Nano Banana 2 图像核心</div>
             </div>
 
             <div className="mt-3 p-2.5 bg-[#1a1c1f] border border-[var(--border)] rounded mb-4">
-              <div className="text-[10px] uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex items-center gap-1.5 hover:text-white transition-colors cursor-help" title="用于 Gemini Pro 分离生图与提示词分析。如果遇到 429 报错，请在此处覆盖平台配置。">
+              <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex items-center gap-1.5 hover:text-white transition-colors cursor-help" title="用于 Gemini Pro 分离生图与提示词分析。如果遇到 429 报错，请在此处覆盖平台配置。">
                 <Sparkles className="w-3 h-3" /> 自定义 API Key
               </div>
               <div className="relative group">
@@ -796,7 +1078,7 @@ export default function App() {
                   value={customApiKey}
                   onChange={(e) => setCustomApiKey(e.target.value)}
                   placeholder="Paste your Gemini API Key here..."
-                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] font-mono transition-colors pr-8 placeholder:text-gray-600"
+                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2.5 py-1.5 text-sm text-white outline-none focus:border-[var(--accent)] font-mono transition-colors pr-8 placeholder:text-gray-600"
                 />
                 <button
                   onClick={() => setShowApiKey(!showApiKey)}
@@ -831,8 +1113,33 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="h-full flex flex-col items-center justify-center text-center opacity-40"
               >
-                <LayoutGrid className="w-12 h-12 mb-4 text-[var(--text-dim)]" />
-                <p className="text-sm font-mono uppercase tracking-[0.3em]">等待内容输入处理...</p>
+                {isAnalyzing ? (
+                  <div className="w-64 max-w-full">
+                    <div className="flex justify-between items-end mb-2">
+                      <span className="text-sm font-bold text-[var(--accent)] uppercase tracking-widest flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        AI 深度拆解中
+                      </span>
+                      <span className="text-xs font-mono text-[var(--text-dim)]">{analysisProgress}%</span>
+                    </div>
+                    <div className="h-1 bg-[#1a1c1f] rounded overflow-hidden">
+                      <motion.div 
+                        className="h-full bg-[var(--accent)]"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${analysisProgress}%` }}
+                        transition={{ ease: "linear" }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-[var(--text-dim)] font-mono uppercase mt-3 tracking-wider">
+                      {analysisProgress < 30 ? "正在提取角色与场景..." : analysisProgress < 60 ? "分析时间线与动作发生..." : analysisProgress < 85 ? "匹配影视级构图模式..." : "整合封包中..."}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <LayoutGrid className="w-12 h-12 mb-4 text-[var(--text-dim)]" />
+                    <p className="text-sm font-mono uppercase tracking-[0.3em]">等待内容输入处理...</p>
+                  </>
+                )}
               </motion.div>
             ) : rawAnalysisText && !results ? (
               <motion.div 
@@ -872,7 +1179,20 @@ export default function App() {
                       <div className="space-y-4">
                         <SectionTitle>角色元数据</SectionTitle>
                         {results.characters.map((char, i) => (
-                          <Card key={i} title={char.name}>
+                          <Card 
+                            key={i} 
+                            title={char.name}
+                            headerRight={
+                              <button 
+                                onClick={() => generateMetaImage('character', char, i)}
+                                disabled={generatingMetaImage === `character-${i}`}
+                                className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
+                              >
+                                {generatingMetaImage === `character-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
+                                生图
+                              </button>
+                            }
+                          >
                             <textarea
                               value={char.description}
                               onChange={(e) => updateCharacter(i, "description", e.target.value)}
@@ -905,7 +1225,21 @@ export default function App() {
                       <div className="space-y-4">
                         <SectionTitle>场景环境扫描</SectionTitle>
                         {results.scenes.map((scene, i) => (
-                          <Card key={i} title={scene.name} className="border-l-2 border-l-[var(--accent)]">
+                          <Card 
+                            key={i} 
+                            title={scene.name} 
+                            className="border-l-2 border-l-[var(--accent)]"
+                            headerRight={
+                              <button 
+                                onClick={() => generateMetaImage('scene', scene, i)}
+                                disabled={generatingMetaImage === `scene-${i}`}
+                                className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
+                              >
+                                {generatingMetaImage === `scene-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
+                                生图
+                              </button>
+                            }
+                          >
                             <div className="mb-2">
                               <span className="text-[var(--text-dim)] uppercase text-[9px] font-bold block mb-1">整体环境</span>
                               <input 
@@ -945,13 +1279,23 @@ export default function App() {
                           {results.props.map((prop, i) => (
                             <div key={i} className="bg-[var(--surface)] border border-[var(--border)] p-3 rounded">
                               <div className="flex items-center justify-between mb-2">
-                                <input 
-                                  type="text"
-                                  value={prop.name}
-                                  onChange={(e) => updateProp(i, "name", e.target.value)}
-                                  className="bg-transparent border-none text-[10px] font-bold text-white uppercase outline-none focus:text-[var(--accent)] p-0 m-0"
-                                />
-                                <Badge>道具</Badge>
+                                <div className="flex items-center gap-2 flex-1">
+                                  <input 
+                                    type="text"
+                                    value={prop.name}
+                                    onChange={(e) => updateProp(i, "name", e.target.value)}
+                                    className="bg-transparent border-none text-[10px] font-bold text-white uppercase outline-none focus:text-[var(--accent)] p-0 m-0 flex-1"
+                                  />
+                                  <Badge>道具</Badge>
+                                </div>
+                                <button 
+                                  onClick={() => generateMetaImage('prop', prop, i)}
+                                  disabled={generatingMetaImage === `prop-${i}`}
+                                  className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50 ml-2"
+                                >
+                                  {generatingMetaImage === `prop-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
+                                  生图
+                                </button>
                               </div>
                               <textarea
                                 value={prop.description}
@@ -1093,19 +1437,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* Status Bar */}
-      <footer className="h-[24px] bg-[var(--accent)] text-black font-mono text-[10px] font-bold flex items-center px-4 uppercase tracking-tighter justify-between">
-        <div>
-          系统运行中 // GPU负载: {isGeneratingAll ? "88%" : "12%"} // 渲染队列: {Object.keys(frameImages).length}/{results?.storyboard.length || "0"} // 准备导出数据
-        </div>
-        {genStatus && (
-          <div className="flex items-center gap-2">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            <span>{genStatus}</span>
-          </div>
-        )}
-      </footer>
-
       {/* Image Preview Modal */}
       <ImageModal 
         index={previewFrameIndex}
@@ -1115,6 +1446,13 @@ export default function App() {
         onNavigate={(newIndex) => setPreviewFrameIndex(newIndex)}
         onUpdate={updateStoryboardFrame}
       />
+      
+      {/* Login Modal */}
+      <AnimatePresence>
+        {showLoginModal && (
+          <LoginModal onClose={() => setShowLoginModal(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

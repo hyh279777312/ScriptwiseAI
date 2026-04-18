@@ -22,6 +22,12 @@ export interface Prop {
   usage: string;
 }
 
+export interface ReferenceImage {
+  id: string;
+  url: string;
+  name: string;
+}
+
 export interface StoryboardFrame {
   frameNumber: number;
   visualDescription: string;
@@ -227,7 +233,8 @@ export async function generateComfyUIFrame(
   promptNodeId: string,
   description: string,
   globalStyle?: string,
-  isBatchMode: boolean = false
+  isBatchMode: boolean = false,
+  samplerConfig?: { promptWeight?: string, samplerName?: string, steps?: string }
 ): Promise<string[]> {
   const workflow = JSON.parse(workflowStr);
   let fullPrompt = globalStyle ? `${description}, ${globalStyle}` : description;
@@ -297,6 +304,20 @@ export async function generateComfyUIFrame(
     if (node.class_type && node.class_type.includes("Sampler")) {
       if (node.inputs.seed !== undefined) node.inputs.seed = Math.floor(Math.random() * 1000000000000000);
       if (node.inputs.noise_seed !== undefined) node.inputs.noise_seed = Math.floor(Math.random() * 1000000000000000);
+      
+      if (samplerConfig) {
+        if (samplerConfig.promptWeight) {
+          const cfgValue = parseFloat(samplerConfig.promptWeight);
+          if (!isNaN(cfgValue)) node.inputs.cfg = cfgValue;
+        }
+        if (samplerConfig.steps) {
+          const stepsValue = parseInt(samplerConfig.steps, 10);
+          if (!isNaN(stepsValue)) node.inputs.steps = stepsValue;
+        }
+        if (samplerConfig.samplerName) {
+          node.inputs.sampler_name = samplerConfig.samplerName;
+        }
+      }
     }
     
     // Force batch size to 1 if we are explicitly asking for a single image, 

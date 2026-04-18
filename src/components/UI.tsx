@@ -6,19 +6,23 @@ export interface CardProps {
   children: ReactNode;
   icon?: ReactNode;
   className?: string;
+  headerRight?: ReactNode;
   key?: any;
 }
 
-export function Card({ title, children, icon, className = "" }: CardProps) {
+export function Card({ title, children, icon, className = "", headerRight }: CardProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className={`bg-[var(--surface)] border border-[var(--border)] rounded-md overflow-hidden ${className}`}
     >
-      <div className="px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)] flex items-center gap-2">
-        {icon && <div className="text-[var(--accent)]">{icon}</div>}
-        <h3 className="font-mono font-bold text-[var(--accent)] uppercase tracking-widest text-[10px]">{title}</h3>
+      <div className="px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)] flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          {icon && <div className="text-[var(--accent)]">{icon}</div>}
+          <h3 className="font-mono font-bold text-[var(--accent)] uppercase tracking-widest text-[10px]">{title}</h3>
+        </div>
+        {headerRight && <div>{headerRight}</div>}
       </div>
       <div className="p-4">{children}</div>
     </motion.div>

@@ -145,18 +145,18 @@ export function StoryboardFrameCard({
         )}
       </div>
 
-      <div className="flex-1 p-2 bg-[var(--surface)] border-t border-[var(--border)] overflow-hidden flex flex-col">
+      <div className="h-[90px] p-2 bg-[var(--surface)] border-t border-[var(--border)] flex flex-col justify-between">
         <div className="flex-1 overflow-y-auto mb-2 custom-scrollbar">
           <textarea
              value={frame.visualDescription}
              onChange={(e) => onUpdatePrompt?.(e.target.value)}
-             className="w-full h-full bg-transparent border-none text-[9px] leading-tight text-[var(--text-main)] font-medium p-0 outline-none focus:text-[var(--accent)] resize-none"
+             className="w-full h-full bg-transparent border-none text-xs leading-relaxed text-[var(--text-main)] font-medium p-0 outline-none focus:text-[var(--accent)] resize-none"
              placeholder="分镜画面描述..."
           />
         </div>
-        <div className="flex gap-1 items-center flex-shrink-0 pt-1 border-t border-white/5">
+        <div className="flex gap-1 items-center flex-shrink-0 pt-1.5 border-t border-white/5">
           <Badge text="旁白" />
-          <p className="text-[8px] text-[var(--text-dim)] italic truncate" title={frame.audioVoiceover}>{frame.audioVoiceover}</p>
+          <p className="text-[10px] text-[var(--text-dim)] italic truncate" title={frame.audioVoiceover}>{frame.audioVoiceover}</p>
         </div>
       </div>
     </div>
