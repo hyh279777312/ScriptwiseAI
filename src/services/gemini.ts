@@ -33,8 +33,11 @@ export interface StoryboardFrame {
   visualDescription: string;
   audioVoiceover: string;
   composition: string;
-  shotType?: string;      // 新增景别字段
-  cameraMovement?: string; // 新增镜头动作字段
+  shotType?: string;      // 景别
+  angle?: string;         // 角度
+  narration?: string;    // 旁白
+  dialogue?: string;     // 对白
+  cameraMovement?: string; // 镜头动作
 }
 
 export interface AnalysisResult {
@@ -90,11 +93,77 @@ ${JSON.stringify(entity)}
   }
 }
 
-// Analysis: Gemini 3.1 Pro Preview (Member Quota)
-// Image Generation: Nano Banana series (2.5 Regular / 3.1 High Quality)
+/**
+ * 优化分镜视觉描述提示词
+ */
+export async function optimizeStoryboardPrompt(
+  visualDescription: string,
+  context: string,
+  engine: string = "gemini",
+  apiKey?: string
+): Promise<string> {
+  const prompt = `
+    你是一位电影视觉大师和顶级提示词工程师。
+    请根据提供的【视觉描述】和【剧本逻辑上下文】，将其扩写并优化为一段更具画面感、细节丰富、且符合电影工业标准的生图提示词。
+    
+    优化要求：
+    1. 增强细节：加入具体的构图、景深、光影效果（如丁达尔效应、冷暖对冲等）、材质细节、色彩氛围。
+    2. 明确构图：在提示词中强调镜头语言（如：俯瞰全景、极简构图、对称构图等）。
+    3. 风格对齐：确保优化后的描述能产生极具视觉冲击力的图像。
+    4. 简洁高效：描述应精准、有力。
+    5. 【语言要求】：请直接输出优化后的【中文描述内容】，不要包含任何解释、引号或前缀。
+    
+    【原始描述】：${visualDescription}
+    【剧本上下文】：${context}
+  `.trim();
+
+  try {
+    if (engine === "gemini") {
+      const currentAi = apiKey ? new GoogleGenAI({ apiKey: apiKey }) : ai;
+      const model = "gemini-3.1-pro";
+      const response = await currentAi.models.generateContent({
+        model,
+        contents: { parts: [{ text: prompt }] },
+      });
+      return response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || visualDescription;
+    } else {
+      // For GPT, Doubao or other LLMs
+      const modelMap: Record<string, string> = {
+        gpt: "gpt-4o",
+        doubao: "doubao-pro-128k"
+      };
+      const endpointMap: Record<string, string> = {
+        gpt: "https://api.openai.com/v1/chat/completions",
+        doubao: "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+      };
+
+      const endpoint = endpointMap[engine] || endpointMap["gpt"];
+      const model = modelMap[engine] || engine;
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [{ role: "system", content: "你是一位电影视觉大师，擅长网页提示词优化。" }, { role: "user", content: prompt }]
+        })
+      });
+
+      if (!res.ok) throw new Error(`${engine} 优化请求失败: ${res.statusText}`);
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content?.trim() || visualDescription;
+    }
+  } catch (err) {
+    console.error(`${engine} prompt optimization failed`, err);
+    return visualDescription; // Fallback to original
+  }
+}
 
 export async function analyzeScript(script: string, referenceImages?: string[], customApiKey?: string): Promise<AnalysisResult> {
-  const model = "gemini-3.1-pro-preview"; // Using the best available Pro model for analysis
+  const model = "gemini-3.1-pro"; // Using the best available Pro model for analysis
   const currentAi = customApiKey ? new GoogleGenAI({ apiKey: customApiKey }) : ai;
   
   const contentParts: any[] = [
@@ -488,17 +557,129 @@ export async function generateComfyUIFrame(
   }
 }
 
+/**
+ * 使用其他 LLM (GPT, Doubao 等) 进行剧本分析
+ */
+export async function analyzeScriptWithOtherLLM(
+  script: string, 
+  engine: "gpt" | "doubao",
+  apiKey: string
+): Promise<AnalysisResult> {
+  const prompt = `
+    你是一位专业的导演和分镜师。
+    请分析以下故事梗概/剧本，提取角色、场景、道具，并生成一个专业的分镜矩阵。
+    
+    特别指令：
+    1. 所有的输出内容必须使用【中文】。
+    2. 【重要格式】：输出必须为纯粹的 JSON 格式，包含 characters, scenes, props, storyboard 四个数组。
+    3. storyboard 中每一帧视觉描述（visualDescription）开头必须包含景别、镜头、画面风格。
+    
+    剧本内容：${script}
+    
+    请严格返回符合以下结构的 JSON 字符串 (不要包含 md 代码块标识):
+    {
+      "characters": [],
+      "scenes": [],
+      "props": [],
+      "storyboard": []
+    }
+  `.trim();
+
+  // 映射模型名称
+  const modelMap = {
+    gpt: "gpt-4o",
+    doubao: "doubao-pro-128k"
+  };
+
+  // 映射控制台 API 端点 (此处为示意，实际根据具体服务商调整)
+  const endpointMap = {
+    gpt: "https://api.openai.com/v1/chat/completions",
+    doubao: "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+  };
+
+  try {
+    const res = await fetch(endpointMap[engine], {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: modelMap[engine],
+        messages: [{ role: "user", content: prompt }],
+        response_format: { type: "json_object" }
+      })
+    });
+
+    if (!res.ok) throw new Error(`${engine} API 调用失败: ${res.statusText}`);
+    const data = await res.json();
+    const content = data.choices[0].message.content;
+    return JSON.parse(content) as AnalysisResult;
+  } catch (err) {
+    console.error(`${engine} analysis failed`, err);
+    throw err;
+  }
+}
+
+/**
+ * 使用其他生图引擎 (即梦, 可灵, MJ) 生成图片
+ */
+export async function generateWithOtherImageEngine(
+  description: string,
+  engine: "jimeng" | "kling" | "mj",
+  apiKey: string,
+  aspectRatio: string = "16:9"
+): Promise<string> {
+  // 注意：此处代码为示意不同引擎的 API 调用逻辑。
+  // 实际生产中应根据各家厂商的最新 API 文档进行对接。
+  
+  const prompt = description;
+  
+  // 示意端点
+  const endpointMap = {
+    jimeng: "https://api.dreamina.com/v1/gen/t2i",
+    kling: "https://api.klingai.com/v1/images/generations",
+    mj: "https://api.mj-proxy.com/v1/mj/submit/imagine" // 假设是一个中转类 API
+  };
+
+  try {
+    // 统一以 MJ 中转格式为例，或按需细化
+    const res = await fetch(endpointMap[engine], {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        prompt: prompt,
+        aspect_ratio: aspectRatio,
+        engine: engine
+      })
+    });
+
+    if (!res.ok) throw new Error(`${engine} 生成请求失败: ${res.statusText}`);
+    const data = await res.json();
+    
+    // 如果是异步任务（如 MJ），此处可能需要轮询获取结果。这里简化处理。
+    return data.url || data.image_url || data.data?.[0]?.url || "";
+  } catch (err) {
+    console.error(`${engine} generation failed`, err);
+    throw err;
+  }
+}
+
 export async function generateFrameImage(
   description: string, 
-  isHighQuality: boolean = false,
   globalStyle?: string,
   projectContext?: string,
   aspectRatio: string = "16:9",
   customApiKey?: string
 ): Promise<string> {
   const currentAi = customApiKey ? new GoogleGenAI({ apiKey: customApiKey }) : ai;
-  // 指定使用最新的 Flash 生图系列 (2.5 / 3.1 预览版)
-  const model = isHighQuality ? "gemini-3.1-flash-image-preview" : "gemini-2.5-flash-image";
+  const isDefaultKey = !customApiKey;
+  
+  // 使用正式版 3.1 Flash Image 模型
+  let model = "gemini-3.1-flash-image";
   
   const prompt = `
     视觉创作指令 (Visual Directive):
@@ -509,21 +690,29 @@ export async function generateFrameImage(
     生成指令：请根据“项目一致性约束”中提到的角色和场景设定，结合“分镜描述”中的动作，以“风格总控”定义的艺术风格生成一张高质量图片。
   `.trim();
   
-  const response = await currentAi.models.generateContent({
-    model,
-    contents: { parts: [{ text: prompt }] },
-    config: {
-      imageConfig: {
-        aspectRatio: aspectRatio as any,
-        ...(isHighQuality ? { imageSize: "1K" } : {}) // 1K resolution for HQ mode
+  try {
+    const response = await currentAi.models.generateContent({
+      model,
+      contents: { parts: [{ text: prompt }] },
+      config: {
+        imageConfig: {
+          aspectRatio: aspectRatio as any,
+          imageSize: "1K"
+        }
+      }
+    });
+
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) {
+        return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-  });
-
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) {
-      return `data:image/png;base64,${part.inlineData.data}`;
+  } catch (err: any) {
+    const errorMsg = JSON.stringify(err);
+    if (errorMsg.includes("429") && isDefaultKey) {
+       throw new Error("GEMINI_IMAGE_QUOTA_EXHAUSTED: 系统共享生图额度已耗尽。请在侧边栏底部的『API管理』中配置您个人的 Gemini API Key 以继续使用。 (You can get a free key at aistudio.google.com)");
     }
+    throw err;
   }
 
   throw new Error("Image generation failed");
@@ -531,14 +720,13 @@ export async function generateFrameImage(
 
 export async function generateGridImage(
   frames: { number: number, description: string }[],
-  isHighQuality: boolean = false,
   globalStyle?: string,
   projectContext?: string,
   aspectRatio: string = "16:9",
   customApiKey?: string
 ): Promise<string> {
   const currentAi = customApiKey ? new GoogleGenAI({ apiKey: customApiKey }) : ai;
-  const model = isHighQuality ? "gemini-3.1-flash-image-preview" : "gemini-2.5-flash-image";
+  const model = "gemini-3.1-flash-image";
   
   const framesText = frames.map(f => `格 ${f.number}: ${f.description}`).join('\n');
   
@@ -559,7 +747,7 @@ export async function generateGridImage(
     config: {
       imageConfig: {
         aspectRatio: "16:9",
-        ...(isHighQuality ? { imageSize: "4K" } : {}) 
+        imageSize: "4K"
       }
     }
   });

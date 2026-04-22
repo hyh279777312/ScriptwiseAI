@@ -10,16 +10,17 @@ interface Props {
   onPreview?: (frameNumber: number) => void;
   onUpdatePrompt?: (newPrompt: string) => void;
   imageUrl?: string;
-  isHighQuality?: boolean;
+  isHighQuality?: boolean; // Keep for compatibility but ignored
   globalStyle?: string;
   projectContext?: string;
   aspectRatio?: string;
   engineConfigs?: {
-    engine: "gemini" | "comfyui_t2i" | "comfyui_i2i" | "comfyui_i2i_prompt";
+    engine: string;
     comfyUrl: string;
     comfyNodeId: string;
     comfyWorkflow: string;
     referenceImages?: { id: string, url: string, name: string }[];
+    apiKeys?: Record<string, string>;
   };
   customApiKey?: string;
   key?: any;
@@ -86,8 +87,17 @@ export function StoryboardFrameCard({
             isI2I ? engineConfigs.referenceImages : undefined
           );
           url = urls[0];
+        } else if (engineConfigs?.engine === "jimeng" || engineConfigs?.engine === "kling" || engineConfigs?.engine === "mj") {
+          const { generateWithOtherImageEngine } = await import("../services/gemini");
+          const key = engineConfigs.apiKeys ? (engineConfigs.apiKeys[engineConfigs.engine] || "") : "";
+          url = await generateWithOtherImageEngine(
+            finalPrompt,
+            engineConfigs.engine as any,
+            key,
+            aspectRatio
+          );
         } else {
-          url = await generateFrameImage(finalPrompt, isHighQuality, "", "", aspectRatio, customApiKey);
+          url = await generateFrameImage(finalPrompt, "", "", aspectRatio, customApiKey);
         }
         onGenerateImage(frame.frameNumber, url);
         break; 

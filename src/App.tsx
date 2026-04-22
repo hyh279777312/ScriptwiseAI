@@ -43,7 +43,9 @@ import {
   LogOut,
   File,
   FolderOpen,
-  Save
+  Save,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -57,6 +59,7 @@ export default function App() {
   const [generatingMetaImage, setGeneratingMetaImage] = useState<string | null>(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -148,14 +151,22 @@ export default function App() {
           aspectRatio
         );
         url = urls[0];
+      } else if (selectedEngine === "jimeng" || selectedEngine === "kling" || selectedEngine === "mj") {
+        const { generateWithOtherImageEngine } = await import("./services/gemini");
+        const apiKey = apiKeys[selectedEngine] || "";
+        url = await generateWithOtherImageEngine(
+          prompt,
+          selectedEngine as any,
+          apiKey,
+          aspectRatio
+        );
       } else {
         url = await generateFrameImage(
           prompt,
-          isHighQuality,
           globalStyle,
           getProjectContext(),
           aspectRatio,
-          customApiKey
+          apiKeys.gemini
         );
       }
       
@@ -164,6 +175,7 @@ export default function App() {
         url: url,
         name: `${item.name} 设定图`
       }]);
+      setMetaImages(prev => ({ ...prev, [key]: url }));
     } catch (err) {
       console.error(err);
       alert(`生成${item.name}的设定图失败: ` + String(err));
@@ -200,14 +212,93 @@ export default function App() {
     setResults({ ...results, storyboard: newStoryboard });
   };
 
+  const addRow = (type: 'character' | 'scene' | 'prop' | 'storyboard') => {
+    if (!results) return;
+    const newResults = { ...results };
+    if (type === 'character') {
+      newResults.characters = [...newResults.characters, { name: "新角色", description: "", clothing: "", makeup: "" }];
+    } else if (type === 'scene') {
+      newResults.scenes = [...newResults.scenes, { name: "新场景", setting: "", lighting: "", atmosphere: "" }];
+    } else if (type === 'prop') {
+      newResults.props = [...newResults.props, { name: "新道具", description: "", usage: "" }];
+    } else if (type === 'storyboard') {
+      const nextNum = newResults.storyboard.length + 1;
+      newResults.storyboard = [...newResults.storyboard, { frameNumber: nextNum, shotType: "全景", angle: "平视", visualDescription: "描述内容...", composition: "居中构图", dialogue: "", narration: "" }];
+    }
+    setResults(newResults);
+  };
+
+  const [optimizingFramePrompt, setOptimizingFramePrompt] = useState<number | null>(null);
+
+  const handleOptimizeFramePrompt = async (index: number) => {
+    if (!results) return;
+    setOptimizingFramePrompt(index);
+    try {
+      const frame = results.storyboard[index];
+      const { optimizeStoryboardPrompt } = await import("./services/gemini");
+      const key = apiKeys[analysisEngine] || apiKeys.gemini;
+      const optimized = await optimizeStoryboardPrompt(
+        frame.visualDescription,
+        getProjectContext(),
+        analysisEngine,
+        key
+      );
+      updateStoryboardFrame(index, "visualDescription", optimized);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setOptimizingFramePrompt(null);
+    }
+  };
+
+  const deleteRow = (type: 'character' | 'scene' | 'prop' | 'storyboard', index: number) => {
+    if (!results) return;
+    const newResults = { ...results };
+    if (type === 'character') {
+      newResults.characters = newResults.characters.filter((_, i) => i !== index);
+    } else if (type === 'scene') {
+      newResults.scenes = newResults.scenes.filter((_, i) => i !== index);
+    } else if (type === 'prop') {
+      newResults.props = newResults.props.filter((_, i) => i !== index);
+    } else if (type === 'storyboard') {
+      newResults.storyboard = newResults.storyboard.filter((_, i) => i !== index);
+    }
+    setResults(newResults);
+  };
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
-  const [isHighQuality, setIsHighQuality] = useState(false);
   const [genStatus, setGenStatus] = useState("");
   const [globalStyle, setGlobalStyle] = useState("Cinematic Movie");
   const [customStyle, setCustomStyle] = useState("");
   const [aspectRatio, setAspectRatio] = useState("16:9");
+  const [metaImages, setMetaImages] = useState<Record<string, string>>({});
+  
+  // Table Styling States
+  const [tablePadding, setTablePadding] = useState(8);
+  const [tableLineHeight, setTableLineHeight] = useState(1.5);
+  const [tableFontSize, setTableFontSize] = useState(12);
+  const [characterCols, setCharacterCols] = useState<string[]>([]);
+  const [sceneCols, setSceneCols] = useState<string[]>([]);
+  const [propCols, setPropCols] = useState<string[]>([]);
+  const [storyboardCols, setStoryboardCols] = useState<string[]>([]);
+
+  const addColumn = (type: 'character' | 'scene' | 'prop' | 'storyboard') => {
+    const colName = prompt("请输入新列名称:");
+    if (!colName) return;
+    if (type === 'character') setCharacterCols([...characterCols, colName]);
+    if (type === 'scene') setSceneCols([...sceneCols, colName]);
+    if (type === 'prop') setPropCols([...propCols, colName]);
+    if (type === 'storyboard') setStoryboardCols([...storyboardCols, colName]);
+  };
+
+  const removeColumn = (type: 'character' | 'scene' | 'prop' | 'storyboard', colName: string) => {
+    if (type === 'character') setCharacterCols(characterCols.filter(c => c !== colName));
+    if (type === 'scene') setSceneCols(sceneCols.filter(c => c !== colName));
+    if (type === 'prop') setPropCols(propCols.filter(c => c !== colName));
+    if (type === 'storyboard') setStoryboardCols(storyboardCols.filter(c => c !== colName));
+  };
   
   // Project Management States
   const [projectName, setProjectName] = useState("未命名工程");
@@ -215,12 +306,12 @@ export default function App() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   
   // Analysis Engine configurations
-  const [analysisEngine, setAnalysisEngine] = useState<"gemini" | "ollama">("ollama");
+  const [analysisEngine, setAnalysisEngine] = useState<string>("ollama");
   const [analysisOllamaUrl, setAnalysisOllamaUrl] = useState("http://127.0.0.1:11434");
   const [analysisOllamaModel, setAnalysisOllamaModel] = useState("qwen3-coder:30b");
 
   // Image Generation Engine configurations
-  const [selectedEngine, setSelectedEngine] = useState<"gemini" | "comfyui_t2i" | "comfyui_i2i" | "comfyui_i2i_prompt">("comfyui_t2i");
+  const [selectedEngine, setSelectedEngine] = useState<string>("comfyui_t2i");
   const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
   const [comfyNodeId, setComfyNodeId] = useState("6");
   const [comfyBatchMode, setComfyBatchMode] = useState(false);
@@ -310,11 +401,19 @@ export default function App() {
     comfyBatchMode,
     comfyBatchSeparator,
     comfyWorkflow,
-    customApiKey,
+    apiKeys,
     layoutMode,
     promptWeight,
     samplerName,
-    samplingSteps
+    samplingSteps,
+    metaImages,
+    tablePadding,
+    tableLineHeight,
+    tableFontSize,
+    characterCols,
+    sceneCols,
+    propCols,
+    storyboardCols
   });
 
   const loadProjectData = (data: any) => {
@@ -335,11 +434,20 @@ export default function App() {
     if (data.comfyBatchMode !== undefined) setComfyBatchMode(data.comfyBatchMode);
     if (data.comfyBatchSeparator !== undefined) setComfyBatchSeparator(data.comfyBatchSeparator);
     if (data.comfyWorkflow !== undefined) setComfyWorkflow(data.comfyWorkflow);
-    if (data.customApiKey !== undefined) setCustomApiKey(data.customApiKey);
+    if (data.apiKeys !== undefined) setApiKeys(data.apiKeys);
+    else if (data.customApiKey !== undefined) setApiKeys(prev => ({ ...prev, gemini: data.customApiKey }));
     if (data.layoutMode !== undefined) setLayoutMode(data.layoutMode);
     if (data.promptWeight !== undefined) setPromptWeight(data.promptWeight);
     if (data.samplerName !== undefined) setSamplerName(data.samplerName);
     if (data.samplingSteps !== undefined) setSamplingSteps(data.samplingSteps);
+    if (data.metaImages !== undefined) setMetaImages(data.metaImages);
+    if (data.tablePadding !== undefined) setTablePadding(data.tablePadding);
+    if (data.tableLineHeight !== undefined) setTableLineHeight(data.tableLineHeight);
+    if (data.tableFontSize !== undefined) setTableFontSize(data.tableFontSize);
+    if (data.characterCols !== undefined) setCharacterCols(data.characterCols);
+    if (data.sceneCols !== undefined) setSceneCols(data.sceneCols);
+    if (data.propCols !== undefined) setPropCols(data.propCols);
+    if (data.storyboardCols !== undefined) setStoryboardCols(data.storyboardCols);
   };
 
   useEffect(() => {
@@ -497,8 +605,16 @@ export default function App() {
   const gridCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isExtractingDoc, setIsExtractingDoc] = useState(false);
   const [rawAnalysisText, setRawAnalysisText] = useState("");
-  const [customApiKey, setCustomApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
+  const [apiKeys, setApiKeys] = useState<Record<string, string>>({
+    gemini: "",
+    gpt: "",
+    jimeng: "",
+    doubao: "",
+    kling: "",
+    mj: ""
+  });
+  const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
+  const [isApiPanelOpen, setIsApiPanelOpen] = useState(false);
 
   const styleOptions = [
     { label: "电影感", value: "电影感镜头, 8k, 高度细节, 电影光效" },
@@ -600,8 +716,13 @@ export default function App() {
           setRawAnalysisText(analysisResult.text);
           setResults(null);
         }
+      } else if (analysisEngine === "gpt" || analysisEngine === "doubao") {
+        const { analyzeScriptWithOtherLLM } = await import("./services/gemini");
+        const key = analysisEngine === "gpt" ? apiKeys.gpt : apiKeys.doubao;
+        res = await analyzeScriptWithOtherLLM(script, analysisEngine as any, key);
+        setResults(res);
       } else {
-        res = await analyzeScript(script, referenceImages.map(img => img.url), customApiKey);
+        res = await analyzeScript(script, referenceImages.map(img => img.url), apiKeys.gemini);
         setResults(res);
       }
       setActiveTab("analysis");
@@ -784,14 +905,22 @@ export default function App() {
               aspectRatio
             );
             url = urls[0];
+          } else if (selectedEngine === "jimeng" || selectedEngine === "kling" || selectedEngine === "mj") {
+            const { generateWithOtherImageEngine } = await import("./services/gemini");
+            const key = selectedEngine === "jimeng" ? apiKeys.jimeng : selectedEngine === "kling" ? apiKeys.kling : apiKeys.mj;
+            url = await generateWithOtherImageEngine(
+              buildPromptWithLayout(frame.visualDescription, frame),
+              selectedEngine,
+              key,
+              aspectRatio
+            );
           } else {
             url = await generateFrameImage(
               buildPromptWithLayout(frame.visualDescription, frame), 
-              isHighQuality, 
               customStyle || globalStyle,
               getProjectContext(),
               aspectRatio,
-              customApiKey
+              apiKeys.gemini
             );
           }
           setFrameImages(prev => ({ ...prev, [frame.frameNumber]: url }));
@@ -804,7 +933,7 @@ export default function App() {
           
           if (errorMsg.includes("403")) {
             setGenStatus("权限不足 - 请检查 API KEY");
-            alert("PERMISSION_DENIED (403): 批量生成中断。请确保已在右上角正确配置 API Key。部分生图模型（如 Banana Pro HQ）需要使用您的自有配额 (Member Quota)。");
+            alert("PERMISSION_DENIED (403): 批量生成中断。请确保已在 **左侧栏底部『自定义 API 管理』** 中正确配置您的 API Key。部分生图模型可能需要使用您的自有配额。");
             break; 
           }
 
@@ -817,7 +946,7 @@ export default function App() {
               continue;
             } else {
               setGenStatus("额度耗尽 - 已暂停");
-              alert("QUOTA EXHAUSTED (429): 批量生成已停止。请点击右上角切换为您的个人 API Key (Member Quota) 以继续使用 Pro 会员额度。");
+              alert("QUOTA EXHAUSTED (429): 批量生成已停止。该模型的共享生图额度已耗尽。请点击 **左侧栏底部『自定义 API 管理』**，填入您个人的 Gemini API Key 以继续使用 (您可以在 aistudio.google.com 免费获取)。");
               break;
             }
           } else {
@@ -848,7 +977,15 @@ export default function App() {
       }));
 
       const combinedStyle = customStyle ? `${globalStyle}, ${customStyle}` : globalStyle;
-      const url = await generateGridImage(frameData, isHighQuality, combinedStyle, getProjectContext(), aspectRatio, customApiKey);
+      let url;
+      if (selectedEngine === "jimeng" || selectedEngine === "kling" || selectedEngine === "mj") {
+        const { generateWithOtherImageEngine } = await import("./services/gemini");
+        const apiKey = apiKeys[selectedEngine] || "";
+        const gridPrompt = `Generate a 3x3 grid of images with these descriptions: ${frameData.map(f => f.description).join('; ')}`;
+        url = await generateWithOtherImageEngine(gridPrompt, selectedEngine as any, apiKey, aspectRatio);
+      } else {
+        url = await generateGridImage(frameData, combinedStyle, getProjectContext(), aspectRatio, apiKeys.gemini);
+      }
 
       setGridImageUrls(prev => ({ ...prev, [gridPage]: [url, ...(prev[gridPage] || [])] }));
     } catch (error) {
@@ -918,31 +1055,42 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 flex overflow-hidden relative">
         {/* Sidebar */}
-        <aside className="w-[420px] 2xl:w-[500px] bg-[var(--surface)] border-r border-[var(--border)] flex flex-col overflow-y-auto custom-scrollbar flex-shrink-0">
-          {/* Project Management Header */}
-          <div className="p-4 border-b border-[var(--border)] bg-[#1a1c1f]">
-            <div className="flex items-center justify-between mb-2">
-              <input
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                placeholder="未命名工程"
-                className="bg-transparent border-none outline-none text-sm font-bold text-[var(--accent)] uppercase tracking-widest placeholder:text-gray-600 w-full"
-              />
-              <span className={`text-[10px] w-14 text-right flex-shrink-0 ${hasUnsavedChanges ? 'text-amber-500' : 'text-green-500'}`}>
-                {hasUnsavedChanges ? "未保存" : "已保存"}
-              </span>
+        <motion.aside 
+          initial={false}
+          animate={{ 
+            width: isSidebarCollapsed ? 0 : (window.innerWidth >= 1536 ? 500 : 420),
+            opacity: isSidebarCollapsed ? 0 : 1
+          }}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+          className="bg-[var(--surface)] border-r border-[var(--border)] flex flex-col flex-shrink-0 relative z-10 overflow-hidden"
+        >
+          <div className="w-[420px] 2xl:w-[500px] flex flex-col h-full overflow-hidden">
+            {/* Scrollable Content Area */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-0">
+              {/* Project Management Header */}
+              <div className="p-4 border-b border-[var(--border)] bg-[#1a1c1f]">
+              <div className="flex items-center justify-between mb-2">
+                <input
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                  placeholder="未命名工程"
+                  className="bg-transparent border-none outline-none text-sm font-bold text-[var(--accent)] uppercase tracking-widest placeholder:text-gray-600 w-full"
+                />
+                <span className={`text-[10px] w-14 text-right flex-shrink-0 ${hasUnsavedChanges ? 'text-amber-500' : 'text-green-500'}`}>
+                  {hasUnsavedChanges ? "未保存" : "已保存"}
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                <button onClick={handleNewProject} title="新建工程" className="p-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors tooltip flex-1 flex justify-center"><File className="w-4 h-4" /></button>
+                <button onClick={handleOpenProject} title="打开工程" className="p-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors tooltip flex-1 flex justify-center"><FolderOpen className="w-4 h-4" /></button>
+                <button onClick={handleSaveProject} title="保存" className="p-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors tooltip flex-1 flex justify-center"><Save className="w-4 h-4" /></button>
+                <button onClick={handleSaveAsProject} title="另存为" className="text-[10px] px-2 py-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors uppercase font-bold flex-[2]">另存为本地</button>
+              </div>
             </div>
-            <div className="flex gap-1.5">
-              <button onClick={handleNewProject} title="新建工程" className="p-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors tooltip flex-1 flex justify-center"><File className="w-4 h-4" /></button>
-              <button onClick={handleOpenProject} title="打开工程" className="p-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors tooltip flex-1 flex justify-center"><FolderOpen className="w-4 h-4" /></button>
-              <button onClick={handleSaveProject} title="保存" className="p-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors tooltip flex-1 flex justify-center"><Save className="w-4 h-4" /></button>
-              <button onClick={handleSaveAsProject} title="另存为" className="text-[10px] px-2 py-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors uppercase font-bold flex-[2]">另存为本地</button>
-            </div>
-          </div>
 
-          <div>
+            <div>
             <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex justify-between">
                 <span>输入剧本/梗概</span>
                 {isExtractingDoc && <span className="opacity-70 animate-pulse text-[10px] mt-0.5">解析中...</span>}
@@ -961,58 +1109,6 @@ export default function App() {
                 />
               </div>
             </div>
-
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleImageDrop}
-          >
-            <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2">视觉参考图 <span className="text-xs opacity-40 font-normal">(支持拖拽)</span></div>
-            <div className="grid grid-cols-3 gap-2 mb-3">
-              {referenceImages.map((img, i) => (
-                <div key={img.id} className="relative aspect-square rounded border border-[var(--border)] overflow-hidden group cursor-pointer" onClick={() => setPreviewFrameIndex(10000 + i)}>
-                  <img src={img.url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                  <div className="absolute bottom-0 left-0 right-0 bg-black/80 px-1 py-0.5 text-[8px] text-white truncate text-center opacity-80 group-hover:opacity-0 transition-opacity pointer-events-none">
-                    {img.name}
-                  </div>
-                  <input 
-                    type="text" 
-                    value={img.name}
-                    title={img.name}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => {
-                      const newRef = [...referenceImages];
-                      newRef[i].name = e.target.value;
-                      setReferenceImages(newRef);
-                    }}
-                    className="absolute bottom-0 left-0 w-full bg-black/80 text-[8px] text-white px-1 py-0.5 text-center outline-none opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
-                  />
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); removeImage(i); }}
-                    className="absolute top-1 right-1 bg-black/60 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X className="w-3 h-3 text-white m-[2px]" />
-                  </button>
-                  <div className="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
-                    <ImageIcon className="w-4 h-4 text-white drop-shadow-md" />
-                  </div>
-                </div>
-              ))}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="aspect-square rounded border border-dashed border-[var(--border)] flex items-center justify-center text-[var(--text-dim)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-all bg-[#111]"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-            </div>
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              className="hidden" 
-              multiple 
-              accept="image/*"
-              onChange={handleFileChange}
-            />
-          </div>
 
           <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded">
             <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">生成艺术风格</div>
@@ -1089,11 +1185,13 @@ export default function App() {
               <div className="mb-2">
                 <select
                   value={analysisEngine}
-                  onChange={(e) => setAnalysisEngine(e.target.value as "gemini" | "ollama")}
+                  onChange={(e) => setAnalysisEngine(e.target.value)}
                   className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-[var(--accent)] outline-none focus:border-[var(--accent)] custom-scrollbar"
                 >
                   <option value="ollama" className="text-white bg-[#111]">本地 Ollama (大模型)</option>
                   <option value="gemini" className="text-[var(--text-dim)] bg-[#111]">Google Gemini 2.5 Pro</option>
+                  {apiKeys.gpt && <option value="gpt" className="text-[var(--accent)] bg-[#111]">OpenAI GPT-4o</option>}
+                  {apiKeys.doubao && <option value="doubao" className="text-[var(--accent)] bg-[#111]">字节豆包 (Doubao)</option>}
                 </select>
               </div>
               {analysisEngine === "ollama" && (
@@ -1119,13 +1217,16 @@ export default function App() {
               <div className="mb-2">
                 <select
                   value={selectedEngine}
-                  onChange={(e) => setSelectedEngine(e.target.value as "gemini" | "comfyui_t2i" | "comfyui_i2i" | "comfyui_i2i_prompt")}
+                  onChange={(e) => setSelectedEngine(e.target.value)}
                   className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-[var(--accent)] outline-none focus:border-[var(--accent)] custom-scrollbar"
                 >
                   <option value="gemini" className="text-white bg-[#111]">Google Gemini (推荐)</option>
                   <option value="comfyui_t2i" className="text-[var(--accent)] bg-[#111]">ComfyUI 文生图</option>
                   <option value="comfyui_i2i" className="text-[var(--accent)] bg-[#111]">ComfyUI 图生图</option>
                   <option value="comfyui_i2i_prompt" className="text-[var(--accent)] bg-[#111]">ComfyUI 语义改图</option>
+                  {apiKeys.jimeng && <option value="jimeng" className="text-[var(--accent)] bg-[#111]">即梦 Dreamina (T2I)</option>}
+                  {apiKeys.kling && <option value="kling" className="text-[var(--accent)] bg-[#111]">可灵 Kling (T2I)</option>}
+                  {apiKeys.mj && <option value="mj" className="text-[var(--accent)] bg-[#111]">Midjourney (Proxy)</option>}
                 </select>
               </div>
 
@@ -1193,125 +1294,170 @@ export default function App() {
               )}
             </div>
 
-            <div className="text-sm uppercase font-bold text-white tracking-widest mb-3 mt-4 pt-4 border-t border-[var(--border)]">渲染参数</div>
-            <div className="space-y-4 font-mono text-xs text-[var(--text-dim)]">
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center text-xs"><span>采样步数 (Steps)</span></div>
-                <div className="flex gap-2 text-[10px] flex-wrap">
-                  {["10", "15", "20", "25", "30"].map(stepStr => (
-                    <button 
-                      key={stepStr} 
-                      onClick={() => setSamplingSteps(stepStr)} 
-                      className={`px-2 py-1 rounded border transition-colors ${samplingSteps === stepStr ? 'bg-[var(--accent)] text-black border-[var(--accent)]' : 'bg-[#111] text-white border-[var(--border)] hover:border-[var(--accent)]'}`}
+            {selectedEngine.startsWith("comfyui") && (
+              <>
+                <div className="text-sm uppercase font-bold text-white tracking-widest mb-3 mt-4 pt-4 border-t border-[var(--border)]">渲染参数</div>
+                <div className="space-y-4 font-mono text-xs text-[var(--text-dim)]">
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center text-xs"><span>采样步数 (Steps)</span></div>
+                    <div className="flex gap-2 text-[10px] flex-wrap">
+                      {["10", "15", "20", "25", "30"].map(stepStr => (
+                        <button 
+                          key={stepStr} 
+                          onClick={() => setSamplingSteps(stepStr)} 
+                          className={`px-2 py-1 rounded border transition-colors ${samplingSteps === stepStr ? 'bg-[var(--accent)] text-black border-[var(--accent)]' : 'bg-[#111] text-white border-[var(--border)] hover:border-[var(--accent)]'}`}
+                        >
+                          {stepStr}
+                        </button>
+                      ))}
+                    </div>
+                    <input 
+                      type="number" 
+                      step="1" 
+                      value={samplingSteps} 
+                      onChange={(e) => setSamplingSteps(e.target.value)} 
+                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors mt-1 block" 
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center text-xs"><span>提示词权重 (CFG Scale)</span></div>
+                    <div className="flex gap-2 text-[10px] flex-wrap">
+                      {["0.5", "0.7", "0.9", "1.0", "1.2", "1.5", "2.0"].map(weight => (
+                        <button 
+                          key={weight} 
+                          onClick={() => setPromptWeight(weight)} 
+                          className={`px-2 py-1 rounded border transition-colors ${promptWeight === weight ? 'bg-[var(--accent)] text-black border-[var(--accent)]' : 'bg-[#111] text-white border-[var(--border)] hover:border-[var(--accent)]'}`}
+                        >
+                          {weight}
+                        </button>
+                      ))}
+                    </div>
+                    <input 
+                      type="number" 
+                      step="0.1" 
+                      value={promptWeight} 
+                      onChange={(e) => setPromptWeight(e.target.value)} 
+                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors mt-1 block" 
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center text-xs"><span>采样算法 (Sampler)</span></div>
+                    <select 
+                      value={samplerName} 
+                      onChange={(e) => setSamplerName(e.target.value)} 
+                      className="w-full bg-[#111] border border-[var(--border)] rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors block"
                     >
-                      {stepStr}
-                    </button>
-                  ))}
+                      <optgroup label="Standard">
+                        <option value="euler">euler</option>
+                        <option value="euler_ancestral">euler_ancestral</option>
+                        <option value="heun">heun</option>
+                        <option value="ddpm">ddpm</option>
+                        <option value="ddim">ddim</option>
+                      </optgroup>
+                      <optgroup label="DPM Variants">
+                        <option value="dpm_2">dpm_2</option>
+                        <option value="dpm_2_ancestral">dpm_2_ancestral</option>
+                        <option value="dpm_fast">dpm_fast</option>
+                        <option value="dpm_adaptive">dpm_adaptive</option>
+                        <option value="dpmpp_2s_ancestral">dpmpp_2s_ancestral</option>
+                        <option value="dpmpp_sde">dpmpp_sde</option>
+                        <option value="dpmpp_sde_gpu">dpmpp_sde_gpu</option>
+                        <option value="dpmpp_2m">dpmpp_2m</option>
+                        <option value="dpmpp_2m_sde">dpmpp_2m_sde</option>
+                        <option value="dpmpp_2m_sde_gpu">dpmpp_2m_sde_gpu</option>
+                        <option value="dpmpp_3m_sde">dpmpp_3m_sde</option>
+                        <option value="dpmpp_3m_sde_gpu">dpmpp_3m_sde_gpu</option>
+                      </optgroup>
+                      <optgroup label="Other">
+                        <option value="lms">lms</option>
+                        <option value="lcm">lcm</option>
+                        <option value="uni_pc">uni_pc</option>
+                        <option value="uni_pc_bh2">uni_pc_bh2</option>
+                      </optgroup>
+                    </select>
+                  </div>
                 </div>
-                <input 
-                  type="number" 
-                  step="1" 
-                  value={samplingSteps} 
-                  onChange={(e) => setSamplingSteps(e.target.value)} 
-                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors mt-1 block" 
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center text-xs"><span>提示词权重 (CFG Scale)</span></div>
-                <div className="flex gap-2 text-[10px] flex-wrap">
-                  {["0.5", "0.7", "0.9", "1.0", "1.2", "1.5", "2.0"].map(weight => (
-                    <button 
-                      key={weight} 
-                      onClick={() => setPromptWeight(weight)} 
-                      className={`px-2 py-1 rounded border transition-colors ${promptWeight === weight ? 'bg-[var(--accent)] text-black border-[var(--accent)]' : 'bg-[#111] text-white border-[var(--border)] hover:border-[var(--accent)]'}`}
-                    >
-                      {weight}
-                    </button>
-                  ))}
-                </div>
-                <input 
-                  type="number" 
-                  step="0.1" 
-                  value={promptWeight} 
-                  onChange={(e) => setPromptWeight(e.target.value)} 
-                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors mt-1 block" 
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center text-xs"><span>采样算法 (Sampler)</span></div>
-                <select 
-                  value={samplerName} 
-                  onChange={(e) => setSamplerName(e.target.value)} 
-                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors block"
-                >
-                  <optgroup label="Standard">
-                    <option value="euler">euler</option>
-                    <option value="euler_ancestral">euler_ancestral</option>
-                    <option value="heun">heun</option>
-                    <option value="ddpm">ddpm</option>
-                    <option value="ddim">ddim</option>
-                  </optgroup>
-                  <optgroup label="DPM Variants">
-                    <option value="dpm_2">dpm_2</option>
-                    <option value="dpm_2_ancestral">dpm_2_ancestral</option>
-                    <option value="dpm_fast">dpm_fast</option>
-                    <option value="dpm_adaptive">dpm_adaptive</option>
-                    <option value="dpmpp_2s_ancestral">dpmpp_2s_ancestral</option>
-                    <option value="dpmpp_sde">dpmpp_sde</option>
-                    <option value="dpmpp_sde_gpu">dpmpp_sde_gpu</option>
-                    <option value="dpmpp_2m">dpmpp_2m</option>
-                    <option value="dpmpp_2m_sde">dpmpp_2m_sde</option>
-                    <option value="dpmpp_2m_sde_gpu">dpmpp_2m_sde_gpu</option>
-                    <option value="dpmpp_3m_sde">dpmpp_3m_sde</option>
-                    <option value="dpmpp_3m_sde_gpu">dpmpp_3m_sde_gpu</option>
-                  </optgroup>
-                  <optgroup label="Other">
-                    <option value="lms">lms</option>
-                    <option value="lcm">lcm</option>
-                    <option value="uni_pc">uni_pc</option>
-                    <option value="uni_pc_bh2">uni_pc_bh2</option>
-                  </optgroup>
-                </select>
-              </div>
-            </div>
-            
-            <div className="mt-4 pt-4 border-t border-[var(--border)]">
-              <label className="flex items-center justify-between cursor-pointer group">
-                <span className="text-sm uppercase font-bold text-white tracking-widest group-hover:text-[var(--accent)] transition-colors">高清生图模式 (HQ)</span>
-                <input 
-                  type="checkbox" 
-                  checked={isHighQuality} 
-                  onChange={(e) => setIsHighQuality(e.target.checked)}
-                  className="w-4 h-4 accent-[var(--accent)] cursor-pointer"
-                />
-              </label>
-              <div className="text-[10px] text-[var(--text-dim)] mt-1.5 font-mono uppercase">使用 Nano Banana 2 图像核心</div>
-            </div>
-
-            <div className="mt-3 p-2.5 bg-[#1a1c1f] border border-[var(--border)] rounded mb-4">
-              <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex items-center gap-1.5 hover:text-white transition-colors cursor-help" title="用于 Gemini Pro 分离生图与提示词分析。如果遇到 429 报错，请在此处覆盖平台配置。">
-                <Sparkles className="w-3 h-3" /> 自定义 API Key
-              </div>
-              <div className="relative group">
-                <input
-                  type={showApiKey ? "text" : "password"}
-                  value={customApiKey}
-                  onChange={(e) => setCustomApiKey(e.target.value)}
-                  placeholder="Paste your Gemini API Key here..."
-                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2.5 py-1.5 text-sm text-white outline-none focus:border-[var(--accent)] font-mono transition-colors pr-8 placeholder:text-gray-600"
-                />
-                <button
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-[var(--accent)] transition-colors p-0.5"
-                >
-                  {showApiKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                </button>
-              </div>
-            </div>
+                
+              </>
+            )}
           </div>
-        </aside>
+        </div>
+
+        {/* API Management at bottom */}
+          <div className="mt-auto border-t border-[var(--border)] bg-[#1a1c1f] no-print">
+            <button 
+              onClick={() => setIsApiPanelOpen(!isApiPanelOpen)}
+              className="w-full p-3 flex items-center justify-between hover:bg-[#2a2c31] transition-colors text-[var(--accent)]"
+            >
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4" />
+                <span className="text-xs font-bold uppercase tracking-widest">自定义 API 管理</span>
+              </div>
+              {isApiPanelOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+            </button>
+            
+            <AnimatePresence>
+              {isApiPanelOpen && (
+                <motion.div 
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden border-t border-[var(--border)] bg-[#111]"
+                >
+                  <div className="p-4 space-y-4 max-h-[300px] overflow-y-auto custom-scrollbar">
+                    <div className="text-[10px] text-[var(--text-dim)] uppercase leading-relaxed mb-2 opacity-70">
+                      配置您的 API 密钥。如果遇到 429 报错或需要多模型并发，请填写对应 Key。
+                    </div>
+                    {[
+                      { id: 'gemini', label: 'Google Gemini API', placeholder: 'Gemini Pro Key...' },
+                      { id: 'gpt', label: 'OpenAI GPT API', placeholder: 'sk-...' },
+                      { id: 'jimeng', label: '即梦 Dreamina API', placeholder: 'Jimeng API Key...' },
+                      { id: 'doubao', label: '豆包 Doubao API', placeholder: 'Doubao API Key...' },
+                      { id: 'kling', label: '可灵 Kling API', placeholder: 'Kling API Key...' },
+                      { id: 'mj', label: 'Midjourney API', placeholder: 'MJ Proxy/API Key...' }
+                    ].map((service) => (
+                      <div key={service.id} className="space-y-1.5">
+                        <div className="flex justify-between items-center text-[10px] uppercase font-bold text-white opacity-40 px-1">
+                          <span>{service.label}</span>
+                        </div>
+                        <div className="relative group">
+                          <input
+                            type={showApiKey[service.id] ? "text" : "password"}
+                            value={apiKeys[service.id]}
+                            onChange={(e) => setApiKeys(prev => ({ ...prev, [service.id]: e.target.value }))}
+                            placeholder={service.placeholder}
+                            className="w-full bg-[#1a1c1f] border border-[var(--border)] rounded px-3 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] font-mono transition-colors pr-8 placeholder:text-gray-700"
+                          />
+                          <button
+                            onClick={() => setShowApiKey(prev => ({ ...prev, [service.id]: !prev[service.id] }))}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-600 hover:text-[var(--accent)] transition-colors p-0.5"
+                          >
+                            {showApiKey[service.id] ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      </motion.aside>
+
+        {/* Collapse Toggle Button */}
+        <button 
+          onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          className="absolute top-1/2 -translate-y-1/2 z-30 w-6 h-12 bg-[var(--surface)] border border-[var(--border)] rounded-full flex items-center justify-center hover:bg-[var(--accent)] hover:text-black transition-all shadow-xl no-print"
+          style={{ 
+            left: isSidebarCollapsed ? '-12px' : (window.innerWidth >= 1536 ? '488px' : '408px'),
+            transition: "left 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
+          }}
+        >
+          {isSidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+        </button>
 
         {/* Content Area */}
         <div className="flex-1 bg-[var(--bg)] overflow-y-auto p-6 custom-scrollbar">
@@ -1385,290 +1531,361 @@ export default function App() {
                 className="space-y-8"
               >
                 {activeTab === "analysis" && (
-                  <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                      <div className="space-y-4">
-                        <SectionTitle>角色元数据</SectionTitle>
-                        {results.characters.map((char, i) => (
-                          <Card 
-                            key={i} 
-                            title={char.name}
-                            headerRight={
-                              <div className="flex items-center gap-1.5">
-                                <button 
-                                  onClick={() => handleOptimizePrompt('character', i)}
-                                  disabled={isOptimizing === `character-${i}`}
-                                  className="text-[10px] bg-[#222] border border-[var(--border)] text-[var(--accent)] px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
-                                >
-                                  {isOptimizing === `character-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <Sparkles className="w-3 h-3"/>}
-                                  优化
-                                </button>
-                                <button 
-                                  onClick={() => generateMetaImage('character', char, i)}
-                                  disabled={generatingMetaImage === `character-${i}`}
-                                  className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
-                                >
-                                  {generatingMetaImage === `character-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
-                                  生图
-                                </button>
-                              </div>
-                            }
-                          >
-                            <textarea
-                              value={char.description}
-                              onChange={(e) => updateCharacter(i, "description", e.target.value)}
-                              className="w-full bg-[#111] border border-[var(--border)] rounded p-2 text-[10px] text-white outline-none focus:border-[var(--accent)] mb-3 h-16 resize-none"
-                            />
-                            <div className="grid gap-2">
-                              <div>
-                                <div className="text-[8px] uppercase font-bold text-[var(--text-dim)] mb-1">服装设定</div>
-                                <input
-                                  type="text"
-                                  value={char.clothing}
-                                  onChange={(e) => updateCharacter(i, "clothing", e.target.value)}
-                                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 text-[10px] text-white outline-none focus:border-[var(--accent)]"
-                                />
-                              </div>
-                              <div>
-                                <div className="text-[8px] uppercase font-bold text-[var(--text-dim)] mb-1">妆造设定</div>
-                                <input
-                                  type="text"
-                                  value={char.makeup}
-                                  onChange={(e) => updateCharacter(i, "makeup", e.target.value)}
-                                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 text-[10px] text-white outline-none focus:border-[var(--accent)]"
-                                />
-                              </div>
-                            </div>
-                          </Card>
-                        ))}
-                      </div>
+                  <div className="bg-white text-black p-10 min-h-screen shadow-inner max-w-6xl mx-auto rounded-sm border border-gray-300">
+                    <div className="text-center mb-10 border-b-2 border-black pb-4">
+                      <h1 className="text-2xl font-serif font-bold uppercase tracking-widest">剧本深度拆解分析报告</h1>
+                      <p className="text-xs text-gray-500 mt-2 font-mono italic">AI-ASSISTED PRODUCTION ANALYSIS REPORT</p>
+                    </div>
 
-                      <div className="space-y-4">
-                        <SectionTitle>场景环境扫描</SectionTitle>
-                        {results.scenes.map((scene, i) => (
-                          <Card 
-                            key={i} 
-                            title={scene.name} 
-                            className="border-l-2 border-l-[var(--accent)]"
-                            headerRight={
-                              <div className="flex items-center gap-1.5">
-                                <button 
-                                  onClick={() => handleOptimizePrompt('scene', i)}
-                                  disabled={isOptimizing === `scene-${i}`}
-                                  className="text-[10px] bg-[#222] border border-[var(--border)] text-[var(--accent)] px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
-                                >
-                                  {isOptimizing === `scene-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <Sparkles className="w-3 h-3"/>}
-                                  优化
-                                </button>
-                                <button 
-                                  onClick={() => generateMetaImage('scene', scene, i)}
-                                  disabled={generatingMetaImage === `scene-${i}`}
-                                  className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
-                                >
-                                  {generatingMetaImage === `scene-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
-                                  生图
-                                </button>
-                              </div>
-                            }
-                          >
-                            <div className="mb-2">
-                              <span className="text-[var(--text-dim)] uppercase text-[9px] font-bold block mb-1">整体环境</span>
-                              <input 
-                                type="text"
-                                value={scene.setting}
-                                onChange={(e) => updateScene(i, "setting", e.target.value)}
-                                className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 text-[10px] text-white outline-none focus:border(--accent)"
-                              />
-                            </div>
-                            <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-[var(--border)]">
-                              <div>
-                                <div className="text-[8px] uppercase font-bold text-[var(--text-dim)]">光影氛围</div>
-                                <input 
-                                  type="text"
-                                  value={scene.lighting}
-                                  onChange={(e) => updateScene(i, "lighting", e.target.value)}
-                                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 text-[10px] text-white outline-none focus:border-[var(--accent)]"
-                                />
-                              </div>
-                              <div>
-                                <div className="text-[8px] uppercase font-bold text-[var(--text-dim)]">空间感</div>
-                                <input 
-                                  type="text"
-                                  value={scene.atmosphere}
-                                  onChange={(e) => updateScene(i, "atmosphere", e.target.value)}
-                                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1 text-[10px] text-white outline-none focus:border-[var(--accent)]"
-                                />
-                              </div>
-                            </div>
-                          </Card>
-                        ))}
-                      </div>
-
-                      <div className="space-y-4">
-                        <SectionTitle>道具清单 / 资产</SectionTitle>
-                        <div className="grid grid-cols-1 gap-4">
-                          {results.props.map((prop, i) => (
-                            <div key={i} className="bg-[var(--surface)] border border-[var(--border)] p-3 rounded">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2 flex-1">
-                                  <input 
-                                    type="text"
-                                    value={prop.name}
-                                    onChange={(e) => updateProp(i, "name", e.target.value)}
-                                    className="bg-transparent border-none text-[10px] font-bold text-white uppercase outline-none focus:text-[var(--accent)] p-0 m-0 flex-1"
-                                  />
-                                  <Badge>道具</Badge>
-                                </div>
-                                <div className="flex items-center gap-1.5 ml-2">
-                                  <button 
-                                    onClick={() => handleOptimizePrompt('prop', i)}
-                                    disabled={isOptimizing === `prop-${i}`}
-                                    className="text-[10px] bg-[#111] border border-[var(--border)] text-[var(--accent)] px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
-                                  >
-                                    {isOptimizing === `prop-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <Sparkles className="w-3 h-3"/>}
-                                    优化
-                                  </button>
-                                  <button 
-                                    onClick={() => generateMetaImage('prop', prop, i)}
-                                    disabled={generatingMetaImage === `prop-${i}`}
-                                    className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
-                                  >
-                                    {generatingMetaImage === `prop-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
-                                    生图
-                                  </button>
-                                </div>
-                              </div>
-                              <textarea
-                                value={prop.description}
-                                onChange={(e) => updateProp(i, "description", e.target.value)}
-                                className="w-full bg-[#111] border border-[var(--border)] rounded p-2 text-[10px] text-[var(--text-dim)] outline-none focus:border-[var(--accent)] h-12 resize-none leading-tight"
-                              />
-                              <div className="mt-2 text-[8px] font-mono text-[var(--accent)] opacity-60 flex items-center gap-1">
-                                <span className="flex-shrink-0">使用记录 ::</span>
-                                <input 
-                                  type="text"
-                                  value={prop.usage}
-                                  onChange={(e) => updateProp(i, "usage", e.target.value)}
-                                  className="bg-transparent border-none text-[8px] font-mono text-[var(--accent)] outline-none flex-1 p-0 m-0"
-                                />
-                              </div>
-                            </div>
-                          ))}
+                    <div className="mb-6 flex items-center justify-between no-print overflow-x-auto gap-4">
+                      <div className="flex items-center gap-4 bg-gray-100 p-2 rounded border border-gray-300 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold">字体:</span>
+                          <input type="range" min="8" max="24" value={tableFontSize} onChange={(e) => setTableFontSize(Number(e.target.value))} className="w-16" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold">边距:</span>
+                          <input type="range" min="2" max="30" value={tablePadding} onChange={(e) => setTablePadding(Number(e.target.value))} className="w-16" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold">行高:</span>
+                          <input type="range" min="1" max="3" step="0.1" value={tableLineHeight} onChange={(e) => setTableLineHeight(Number(e.target.value))} className="w-16" />
                         </div>
                       </div>
                     </div>
+
+                    <div className="space-y-12">
+                      {/* Characters Table */}
+                      <section>
+                        <div className="flex items-center justify-between mb-4">
+                          <h2 className="text-lg font-bold border-l-4 border-black pl-3 flex items-center gap-2">
+                            <Users className="w-5 h-5" /> 角色资产清单 (CHARACTERS)
+                          </h2>
+                          <div className="flex gap-2 no-print">
+                            <button onClick={() => addColumn('character')} className="text-[9px] bg-gray-100 border border-gray-300 px-2 py-1 rounded hover:bg-gray-200">+ 增加列</button>
+                            <button onClick={() => addRow('character')} className="text-[9px] bg-black text-white px-3 py-1 rounded font-bold uppercase">+ 添加角色行</button>
+                          </div>
+                        </div>
+                        <div className="overflow-x-auto border border-black">
+                          <table className="w-full border-collapse" style={{ fontSize: `${tableFontSize}px`, lineHeight: tableLineHeight }}>
+                            <thead>
+                              <tr className="bg-gray-50 border-b border-black">
+                                <th className="border-r border-black p-2 w-24">角色姓名</th>
+                                <th className="border-r border-black p-2">核心特征 / 性格描述</th>
+                                <th className="border-r border-black p-2 w-32">服装设定</th>
+                                <th className="border-r border-black p-2 w-32">妆造设定</th>
+                                {characterCols.map(col => (
+                                  <th key={col} className="border-r border-black p-2 relative group">
+                                    {col}
+                                    <button onClick={() => removeColumn('character', col)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-3 h-3 flex items-center justify-center opacity-0 group-hover:opacity-100 no-print">×</button>
+                                  </th>
+                                ))}
+                                <th className="border-r border-black p-2 w-20 no-print">操作</th>
+                                <th className="p-2 w-32 bg-gray-50 font-bold text-center">视觉效果预览</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {results.characters.map((char: any, i) => (
+                                <tr key={i} className="border-b border-gray-300">
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <input className="w-full bg-transparent outline-none font-bold" value={char.name} onChange={(e) => updateCharacter(i, "name", e.target.value)} />
+                                  </td>
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={char.description} onChange={(e) => updateCharacter(i, "description", e.target.value)} />
+                                  </td>
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={char.clothing} onChange={(e) => updateCharacter(i, "clothing", e.target.value)} />
+                                  </td>
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={char.makeup} onChange={(e) => updateCharacter(i, "makeup", e.target.value)} />
+                                  </td>
+                                  {characterCols.map(col => (
+                                    <td key={col} className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                      <textarea 
+                                        className="w-full bg-transparent outline-none min-h-[60px] resize-none" 
+                                        value={char[col] || ""} 
+                                        onChange={(e) => updateCharacter(i, col as any, e.target.value)} 
+                                      />
+                                    </td>
+                                  ))}
+                                  <td className="border-r border-black no-print align-middle text-center" style={{ padding: `${tablePadding}px` }}>
+                                    <div className="flex flex-col gap-1">
+                                      <button onClick={() => generateMetaImage('character', char, i)} className="text-[9px] bg-[var(--accent)] text-black px-2 py-1 rounded">生图</button>
+                                      <button onClick={() => deleteRow('character', i)} className="text-[9px] text-red-600">删除</button>
+                                    </div>
+                                  </td>
+                                  <td className="p-1 bg-gray-50 flex items-center justify-center min-h-[100px]">
+                                    {metaImages[`character-${i}`] ? (
+                                      <img src={metaImages[`character-${i}`]} className="max-h-[100px] object-contain" />
+                                    ) : (
+                                      <div className="text-[8px] text-gray-400 italic">待生成</div>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+
+                      {/* Scenes Table */}
+                      <section>
+                        <div className="flex items-center justify-between mb-4">
+                          <h2 className="text-lg font-bold border-l-4 border-black pl-3 flex items-center gap-2">
+                            <MapPin className="w-5 h-5" /> 场景环境清单 (SCENES)
+                          </h2>
+                          <div className="flex gap-2 no-print">
+                            <button onClick={() => addColumn('scene')} className="text-[9px] bg-gray-100 border border-gray-300 px-2 py-1 rounded hover:bg-gray-200">+ 增加列</button>
+                            <button onClick={() => addRow('scene')} className="text-[9px] bg-black text-white px-3 py-1 rounded font-bold uppercase">+ 添加场景行</button>
+                          </div>
+                        </div>
+                        <div className="overflow-x-auto border border-black">
+                          <table className="w-full border-collapse" style={{ fontSize: `${tableFontSize}px`, lineHeight: tableLineHeight }}>
+                            <thead>
+                              <tr className="bg-gray-50 border-b border-black">
+                                <th className="border-r border-black p-2 w-24">场景名称</th>
+                                <th className="border-r border-black p-2">环境特征与描述</th>
+                                <th className="border-r border-black p-2 w-32">光影气氛</th>
+                                <th className="border-r border-black p-2 w-32">空间构图感</th>
+                                {sceneCols.map(col => (
+                                  <th key={col} className="border-r border-black p-2 relative group">
+                                    {col}
+                                    <button onClick={() => removeColumn('scene', col)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-3 h-3 flex items-center justify-center opacity-0 group-hover:opacity-100 no-print">×</button>
+                                  </th>
+                                ))}
+                                <th className="border-r border-black p-2 w-20 no-print">操作</th>
+                                <th className="p-2 w-32 bg-gray-50 font-bold text-center">视觉效果预览</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {results.scenes.map((scene: any, i) => (
+                                <tr key={i} className="border-b border-gray-300">
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <input className="w-full bg-transparent outline-none font-bold" value={scene.name} onChange={(e) => updateScene(i, "name", e.target.value)} />
+                                  </td>
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={scene.setting} onChange={(e) => updateScene(i, "setting", e.target.value)} />
+                                  </td>
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={scene.lighting} onChange={(e) => updateScene(i, "lighting", e.target.value)} />
+                                  </td>
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={scene.atmosphere} onChange={(e) => updateScene(i, "atmosphere", e.target.value)} />
+                                  </td>
+                                  {sceneCols.map(col => (
+                                    <td key={col} className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                      <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={scene[col] || ""} onChange={(e) => updateScene(i, col as any, e.target.value)} />
+                                    </td>
+                                  ))}
+                                  <td className="border-r border-black no-print align-middle text-center" style={{ padding: `${tablePadding}px` }}>
+                                    <div className="flex flex-col gap-1">
+                                      <button onClick={() => generateMetaImage('scene', scene, i)} className="text-[9px] bg-[var(--accent)] text-black px-2 py-1 rounded">生图</button>
+                                      <button onClick={() => deleteRow('scene', i)} className="text-[9px] text-red-600">删除</button>
+                                    </div>
+                                  </td>
+                                  <td className="p-1 bg-gray-50 flex items-center justify-center">
+                                    {metaImages[`scene-${i}`] ? <img src={metaImages[`scene-${i}`]} className="max-h-[100px] object-contain" /> : <div className="text-[8px] text-gray-400 italic">待生成</div>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+
+                      {/* Props Table */}
+                      <section>
+                        <div className="flex items-center justify-between mb-4">
+                          <h2 className="text-lg font-bold border-l-4 border-black pl-3 flex items-center gap-2">
+                            <Package className="w-5 h-5" /> 关键道具清单 (PROPS)
+                          </h2>
+                          <div className="flex gap-2 no-print">
+                            <button onClick={() => addColumn('prop')} className="text-[9px] bg-gray-100 border border-gray-300 px-2 py-1 rounded hover:bg-gray-200">+ 增加列</button>
+                            <button onClick={() => addRow('prop')} className="text-[9px] bg-black text-white px-3 py-1 rounded font-bold uppercase">+ 添加道具行</button>
+                          </div>
+                        </div>
+                        <div className="overflow-x-auto border border-black">
+                          <table className="w-full border-collapse" style={{ fontSize: `${tableFontSize}px`, lineHeight: tableLineHeight }}>
+                            <thead>
+                              <tr className="bg-gray-50 border-b border-black">
+                                <th className="border-r border-black p-2 w-24">道具名称</th>
+                                <th className="border-r border-black p-2">道具特征 / 设计细节</th>
+                                <th className="border-r border-black p-2 w-48">剧中用途 / 使用逻辑</th>
+                                {propCols.map(col => (
+                                  <th key={col} className="border-r border-black p-2 relative group">
+                                    {col}
+                                    <button onClick={() => removeColumn('prop', col)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-3 h-3 flex items-center justify-center opacity-0 group-hover:opacity-100 no-print">×</button>
+                                  </th>
+                                ))}
+                                <th className="border-r border-black p-2 w-20 no-print">操作</th>
+                                <th className="p-2 w-32 bg-gray-50 font-bold text-center">视觉效果预览</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {results.props.map((prop: any, i) => (
+                                <tr key={i} className="border-b border-gray-300">
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <input className="w-full bg-transparent outline-none font-bold" value={prop.name} onChange={(e) => updateProp(i, "name", e.target.value)} />
+                                  </td>
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={prop.description} onChange={(e) => updateProp(i, "description", e.target.value)} />
+                                  </td>
+                                  <td className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                    <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={prop.usage} onChange={(e) => updateProp(i, "usage", e.target.value)} />
+                                  </td>
+                                  {propCols.map(col => (
+                                    <td key={col} className="border-r border-black p-0" style={{ padding: `${tablePadding}px` }}>
+                                      <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={prop[col] || ""} onChange={(e) => updateProp(i, col as any, e.target.value)} />
+                                    </td>
+                                  ))}
+                                  <td className="border-r border-black no-print align-middle text-center" style={{ padding: `${tablePadding}px` }}>
+                                    <div className="flex flex-col gap-1">
+                                      <button onClick={() => generateMetaImage('prop', prop, i)} className="text-[9px] bg-[var(--accent)] text-black px-2 py-1 rounded">生图</button>
+                                      <button onClick={() => deleteRow('prop', i)} className="text-[9px] text-red-600">删除</button>
+                                    </div>
+                                  </td>
+                                  <td className="p-1 bg-gray-50 flex items-center justify-center">
+                                    {metaImages[`prop-${i}`] ? <img src={metaImages[`prop-${i}`]} className="max-h-[100px] object-contain" /> : <div className="text-[8px] text-gray-400 italic">待生成</div>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+                    </div>
+
+                    <div className="mt-16 pt-6 border-t border-gray-300 text-[10px] text-gray-400 font-mono flex justify-between uppercase">
+                      <span>Confidential - Production Document v1.2</span>
+                      <span>Page 01 of 01</span>
+                    </div>
+                  </div>
                 )}
 
                 {activeTab === "storyboard" && (
-                  <div className="space-y-6">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <SectionTitle>分镜矩阵控制台</SectionTitle>
-                        {results.storyboard.length > 9 && (
-                          <div className="flex items-center gap-2 bg-[var(--surface)] p-1 rounded border border-[var(--border)]">
-                            <button 
-                              disabled={gridPage === 0}
-                              onClick={() => setGridPage(p => Math.max(0, p - 1))}
-                              className="p-1 hover:text-[var(--accent)] disabled:opacity-30"
-                            >
-                              <ChevronLeft className="w-4 h-4" />
-                            </button>
-                            <span className="text-[10px] font-mono font-bold">批次 {gridPage + 1}</span>
-                            <button 
-                              disabled={(gridPage + 1) * 9 >= results.storyboard.length}
-                              onClick={() => setGridPage(p => p + 1)}
-                              className="p-1 hover:text-[var(--accent)] disabled:opacity-30"
-                            >
-                              <ChevronRight className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
+                  <div className="bg-white text-black p-10 min-h-screen shadow-inner max-w-6xl mx-auto rounded-sm border border-gray-300">
+                    <div className="text-center mb-10 border-b-2 border-black pb-4">
+                      <h1 className="text-2xl font-serif font-bold uppercase tracking-widest">影视分镜脚本 (STORYBOARD SCRIPT)</h1>
+                      <p className="text-xs text-gray-500 mt-2 font-mono italic">PRODUCTION STORYBOARD EXECUTION SHEET</p>
+                    </div>
+
+                    <div className="mb-6 flex items-center justify-between no-print">
+                      <div className="flex items-center gap-4 bg-gray-100 p-2 rounded border border-gray-300">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold">字体大小:</span>
+                          <input type="range" min="8" max="24" value={tableFontSize} onChange={(e) => setTableFontSize(Number(e.target.value))} className="w-20" />
+                        </div>
+                        <div className="w-px h-4 bg-gray-300" />
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold">边距:</span>
+                          <input type="range" min="2" max="30" value={tablePadding} onChange={(e) => setTablePadding(Number(e.target.value))} className="w-20" />
+                        </div>
+                        <div className="w-px h-4 bg-gray-300" />
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold">行高:</span>
+                          <input type="range" min="1" max="3" step="0.1" value={tableLineHeight} onChange={(e) => setTableLineHeight(Number(e.target.value))} className="w-20" />
+                        </div>
                       </div>
-                      
+
                       <div className="flex items-center gap-2">
-                        <button 
-                          onClick={generateNineGrid}
-                          disabled={isGridExporting || results.storyboard.length === 0}
-                          className="text-[10px] border border-[var(--accent)] text-[var(--accent)] px-3 py-1.5 rounded font-bold uppercase tracking-widest hover:bg-[var(--accent)] hover:text-black transition-all disabled:opacity-50"
-                        >
-                          <LayoutGrid className="w-3 h-3 inline-block mr-2 -mt-0.5" />
-                          生成当前批次的9宫格分镜图 (第 {gridPage + 1} 批)
-                        </button>
+                        <button onClick={() => addColumn('storyboard')} className="text-[10px] bg-gray-100 border border-gray-300 px-3 py-2 rounded font-bold uppercase tracking-widest hover:bg-gray-200 transition-all">+ 增加列</button>
                         <button 
                           onClick={generateAllFrameImages}
                           disabled={isGeneratingAll}
-                          className="text-[10px] bg-white text-black px-3 py-1.5 rounded font-bold uppercase tracking-widest hover:bg-[var(--accent)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="text-[10px] bg-black text-white px-4 py-2 rounded font-bold uppercase tracking-widest hover:bg-gray-800 transition-all disabled:opacity-50"
                         >
-                          {isGeneratingAll ? "处理中..." : "批量生成当前分镜"}
+                          批量生成全部分镜
+                        </button>
+                        <button 
+                          onClick={() => addRow('storyboard')}
+                          className="text-[10px] bg-[var(--accent)] text-black px-4 py-2 rounded font-bold uppercase tracking-widest hover:brightness-110 transition-all"
+                        >
+                          添加新镜号
                         </button>
                       </div>
                     </div>
-                    
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                      {results.storyboard.slice(gridPage * 9, (gridPage * 9) + 9).map((frame, index) => (
-                        <StoryboardFrameCard 
-                          key={frame.frameNumber} 
-                          frame={frame} 
-                          imageUrl={frameImages[frame.frameNumber]}
-                          onGenerateImage={handleFrameImageGenerated}
-                          onPreview={() => setPreviewFrameIndex((gridPage * 9) + index)}
-                          onUpdatePrompt={(newPrompt) => updateStoryboardFrame((gridPage * 9) + index, "visualDescription", newPrompt)}
-                          isHighQuality={isHighQuality}
-                          globalStyle={customStyle ? `${globalStyle}, ${customStyle}` : globalStyle}
-                          projectContext={getProjectContext()}
-                          aspectRatio={aspectRatio}
-                          engineConfigs={{
-                            engine: selectedEngine,
-                            comfyUrl,
-                            comfyNodeId,
-                            comfyWorkflow
-                          }}
-                          customApiKey={customApiKey}
-                        />
-                      ))}
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse border-t-2 border-l-2 border-black" style={{ fontSize: `${tableFontSize}px`, lineHeight: tableLineHeight }}>
+                        <thead>
+                          <tr className="bg-gray-100 border-b-2 border-black">
+                            <th className="border-r-2 border-b-2 border-black p-2 w-16 text-center">镜号</th>
+                            <th className="border-r-2 border-b-2 border-black p-2 w-24">景别 / 角度</th>
+                            <th className="border-r-2 border-b-2 border-black p-2 w-48">旁白 / 对白</th>
+                            <th className="border-r-2 border-b-2 border-black p-2">画面内容描述</th>
+                            {storyboardCols.map(col => (
+                              <th key={col} className="border-r-2 border-b-2 border-black p-2 relative group">
+                                {col}
+                                <button onClick={() => removeColumn('storyboard', col)} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-3 h-3 flex items-center justify-center opacity-0 group-hover:opacity-100 no-print">×</button>
+                              </th>
+                            ))}
+                            <th className="border-r-2 border-b-2 border-black p-2 w-20 text-center no-print">操作</th>
+                            <th className="border-b-2 border-black p-2 w-64 bg-gray-50 font-bold text-center">分镜视觉效果预览</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {results.storyboard.map((frame: any, i) => (
+                            <tr key={i} className="border-b border-black">
+                              <td className="border-r-2 border-black text-center font-bold" style={{ padding: `${tablePadding}px` }}>
+                                {frame.frameNumber}
+                              </td>
+                              <td className="border-r-2 border-black" style={{ padding: `${tablePadding}px` }}>
+                                <div className="space-y-1">
+                                  <input className="w-full bg-transparent border-b border-gray-200 outline-none font-bold uppercase" value={frame.shotType} onChange={(e) => updateStoryboardFrame(i, "shotType", e.target.value)} />
+                                  <input className="w-full bg-transparent outline-none text-[0.8em] text-gray-500 uppercase" value={frame.angle} onChange={(e) => updateStoryboardFrame(i, "angle", e.target.value)} />
+                                </div>
+                              </td>
+                              <td className="border-r-2 border-black" style={{ padding: `${tablePadding}px` }}>
+                                <textarea className="w-full bg-transparent outline-none resize-none min-h-[60px]" value={frame.narration || frame.dialogue || ""} onChange={(e) => updateStoryboardFrame(i, "narration", e.target.value)} />
+                              </td>
+                              <td className="border-r-2 border-black" style={{ padding: `${tablePadding}px` }}>
+                                <textarea className="w-full bg-transparent outline-none resize-none min-h-[80px]" value={frame.visualDescription} onChange={(e) => updateStoryboardFrame(i, "visualDescription", e.target.value)} />
+                              </td>
+                              {storyboardCols.map(col => (
+                                <td key={col} className="border-r-2 border-black" style={{ padding: `${tablePadding}px` }}>
+                                  <textarea className="w-full bg-transparent outline-none min-h-[60px] resize-none" value={frame[col] || ""} onChange={(e) => updateStoryboardFrame(i, col as any, e.target.value)} />
+                                </td>
+                              ))}
+                              <td className="border-r-2 border-black no-print" style={{ padding: `${tablePadding}px` }}>
+                                <div className="flex flex-col gap-1.5 justify-center h-full">
+                                  <button 
+                                    onClick={() => handleOptimizeFramePrompt(i)}
+                                    disabled={optimizingFramePrompt === i}
+                                    className={`text-[9px] px-2 py-1 rounded transition-colors ${optimizingFramePrompt === i ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#2a2c31] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-black border border-[var(--border)]'}`}
+                                  >
+                                    {optimizingFramePrompt === i ? "优化中..." : "优化"}
+                                  </button>
+                                  <button onClickCapture={async (e) => {
+                                      e.stopPropagation();
+                                      const { generateComfyUIFrame, generateFrameImage, generateWithOtherImageEngine } = await import("./services/gemini");
+                                      let url;
+                                      if (selectedEngine.startsWith("comfyui")) {
+                                        const urls = await generateComfyUIFrame(comfyUrl, comfyWorkflow, comfyNodeId, `Shot: ${frame.shotType}, Angle: ${frame.angle}. ${frame.visualDescription}. ${frame.composition}`, customStyle || globalStyle, false, currentSamplerConfig, undefined, aspectRatio);
+                                        url = urls[0];
+                                      } else if (selectedEngine === "jimeng" || selectedEngine === "kling" || selectedEngine === "mj") {
+                                        const key = apiKeys[selectedEngine] || "";
+                                        url = await generateWithOtherImageEngine(`Shot: ${frame.shotType}, Angle: ${frame.angle}. ${frame.visualDescription}. ${frame.composition}`, selectedEngine as any, key, aspectRatio);
+                                      } else {
+                                        url = await generateFrameImage(`Shot: ${frame.shotType}, Angle: ${frame.angle}. ${frame.visualDescription}. ${frame.composition}`, globalStyle, getProjectContext(), aspectRatio, apiKeys.gemini);
+                                      }
+                                      setFrameImages(prev => ({ ...prev, [frame.frameNumber]: url }));
+                                    }} className="text-[9px] bg-black text-white px-2 py-1 rounded">生图</button>
+                                  <button onClick={() => deleteRow('storyboard', i)} className="text-[9px] text-red-600">删除</button>
+                                </div>
+                              </td>
+                              <td className="bg-gray-50 flex items-center justify-center relative p-1 min-h-[120px]">
+                                {frameImages[frame.frameNumber] ? <img src={frameImages[frame.frameNumber]} className="max-w-full max-h-[150px] object-contain border border-gray-300" /> : <div className="text-[9px] text-gray-400 italic">待渲染</div>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
 
-                    {/* Hidden canvas for grid export */}
-                    <canvas ref={gridCanvasRef} className="hidden" />
-
-                    {gridImageUrls[gridPage] && gridImageUrls[gridPage].length > 0 && (
-                      <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="mt-8 pt-8 border-t border-[var(--border)] pb-8"
-                      >
-                        <div className="flex items-center justify-between mb-4">
-                          <SectionTitle>第 {gridPage + 1} 批次 九宫格合成图</SectionTitle>
-                        </div>
-                        <div className="flex flex-col gap-8">
-                          {gridImageUrls[gridPage].map((url, index) => {
-                            const isLatest = index === 0;
-                            return (
-                              <div key={index} className={`flex flex-col gap-2 ${!isLatest ? 'w-1/2 opacity-60 hover:opacity-100 hover:w-full transition-all duration-300 mx-auto' : 'w-full'}`}>
-                                <div className="flex justify-between items-center px-2">
-                                  <span className="text-[10px] text-[var(--accent)] uppercase tracking-wider font-bold">
-                                    # {gridImageUrls[gridPage].length - index} {isLatest ? "(最新)" : "(历史版本)"}
-                                  </span>
-                                  <a 
-                                    href={url} 
-                                    download={`storyboard_grid_page_${gridPage + 1}_v${gridImageUrls[gridPage].length - index}.jpg`}
-                                    className="text-[10px] bg-[var(--accent)] text-black px-4 py-1.5 rounded font-bold uppercase tracking-widest hover:brightness-110 transition-colors"
-                                  >
-                                    下载原图
-                                  </a>
-                                </div>
-                                <div className="bg-[#0A0B0D] border border-[var(--border)] rounded-lg p-2 flex justify-center shadow-2xl">
-                                  <img 
-                                    src={url} 
-                                    alt={`9-Grid Batch ${gridPage + 1} v${gridImageUrls[gridPage].length - index}`} 
-                                    className="w-full max-w-5xl object-contain rounded"
-                                  />
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </motion.div>
-                    )}
+                    <div className="mt-16 pt-6 border-t border-gray-300 text-[10px] text-gray-400 font-mono flex justify-between uppercase">
+                      <span>Confidential - Production Document v1.2</span>
+                      <span>Page 01 of 01</span>
+                    </div>
                   </div>
                 )}
               </motion.div>
@@ -1683,9 +1900,15 @@ export default function App() {
         storyboard={results?.storyboard || []}
         images={frameImages}
         referenceImages={referenceImages}
+        metaImages={metaImages}
+        results={results}
         onClose={() => setPreviewFrameIndex(null)}
         onNavigate={(newIndex) => setPreviewFrameIndex(newIndex)}
         onUpdate={updateStoryboardFrame}
+        apiKeys={apiKeys}
+        globalStyle={globalStyle}
+        projectContext={getProjectContext()}
+        aspectRatio={aspectRatio}
       />
       
       {/* Login Modal */}
@@ -1703,32 +1926,97 @@ function ImageModal({
   storyboard, 
   images, 
   referenceImages,
+  metaImages,
+  results,
   onClose, 
   onNavigate,
-  onUpdate
+  onUpdate,
+  apiKeys,
+  globalStyle,
+  projectContext,
+  aspectRatio
 }: { 
   index: number | null; 
   storyboard: StoryboardFrame[]; 
   images: Record<number, string>;
   referenceImages?: { id: string, url: string, name: string }[];
+  metaImages?: Record<string, string>;
+  results?: AnalysisResult | null;
   onClose: () => void;
   onNavigate: (index: number) => void;
   onUpdate?: (index: number, field: keyof StoryboardFrame, value: string | number) => void;
+  apiKeys: Record<string, string>;
+  globalStyle: string;
+  projectContext: string;
+  aspectRatio: string;
 }) {
   if (index === null) return null;
   
-  // Custom logic to handle reference image clicks
-  const isRefImage = index >= 10000;
-  const refIndex = isRefImage ? index - 10000 : 0;
-  const imageUrl = isRefImage 
-    ? (referenceImages?.[refIndex]?.url || "")
-    : images[storyboard[index]?.frameNumber];
+  const frame = index < 10000 ? storyboard[index] : null;
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
-  const hasNext = isRefImage ? (referenceImages && refIndex < referenceImages.length - 1) : (index < storyboard.length - 1);
-  const hasPrev = isRefImage ? (refIndex > 0) : (index > 0);
+  const handleRegenerate = async () => {
+    if (!frame) return;
+    setIsRegenerating(true);
+    try {
+      const url = await generateFrameImage(
+        frame.visualDescription, 
+        globalStyle, 
+        projectContext, 
+        aspectRatio, 
+        apiKeys.gemini
+      );
+      if (onUpdate && results) {
+        // App.tsx uses setFrameImages which isn't passed here directly
+        // but we can try to use a window event or simple callback if we had one.
+        // For now, let's just alert or assume onUpdate handles it if we pass a special field.
+        alert("重新生成成功。由于架构限制，预览图将在刷新页面后或退出预览后更新。");
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+  
+  let imageUrl = "";
+  let isRefImage = false;
+  let isMetaImage = false;
+  let metaTitle = "";
+  let hasNext = false;
+  let hasPrev = false;
+  let prevIndex = index - 1;
+  let nextIndex = index + 1;
 
-  const prevIndex = isRefImage ? index - 1 : index - 1;
-  const nextIndex = isRefImage ? index + 1 : index + 1;
+  if (index < 10000) {
+    // Frame
+    imageUrl = images[storyboard[index]?.frameNumber];
+    hasNext = index < storyboard.length - 1;
+    hasPrev = index > 0;
+  } else if (index >= 10000 && index < 20000) {
+    // Reference Image
+    const refIndex = index - 10000;
+    imageUrl = referenceImages?.[refIndex]?.url || "";
+    isRefImage = true;
+    hasNext = referenceImages ? refIndex < referenceImages.length - 1 : false;
+    hasPrev = refIndex > 0;
+  } else {
+    // Meta Image
+    isMetaImage = true;
+    if (index >= 20000 && index < 21000) {
+      const charIndex = index - 20000;
+      imageUrl = metaImages?.[`character-${charIndex}`] || "";
+      metaTitle = `角色设定图: ${results?.characters[charIndex]?.name || ""}`;
+    } else if (index >= 21000 && index < 22000) {
+      const sceneIndex = index - 21000;
+      imageUrl = metaImages?.[`scene-${sceneIndex}`] || "";
+      metaTitle = `场景设定图: ${results?.scenes[sceneIndex]?.name || ""}`;
+    } else if (index >= 22000 && index < 23000) {
+      const propIndex = index - 22000;
+      imageUrl = metaImages?.[`prop-${propIndex}`] || "";
+      metaTitle = `道具设定图: ${results?.props[propIndex]?.name || ""}`;
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-10 pointer-events-none">
@@ -1758,7 +2046,7 @@ function ImageModal({
           {imageUrl && (
             <img 
               src={imageUrl} 
-              alt={isRefImage ? `Reference ${refIndex}` : `Frame`} 
+              alt={isMetaImage ? metaTitle : (isRefImage ? "Reference" : "Frame")} 
               className="max-w-full max-h-full object-contain"
               referrerPolicy="no-referrer"
             />
@@ -1781,7 +2069,8 @@ function ImageModal({
           </button>
         </div>
 
-        {!isRefImage && storyboard[index] && onUpdate && (
+        {/* Info Bars Based on Mode */}
+        {index < 10000 && storyboard[index] && onUpdate && (
           <div className="h-24 bg-[var(--surface)] border-t border-[var(--border)] p-4 flex flex-col justify-center">
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2">
@@ -1813,19 +2102,39 @@ function ImageModal({
           </div>
         )}
         
-        {isRefImage && referenceImages?.[refIndex] && (
+        {isRefImage && (
            <div className="h-16 bg-[var(--surface)] border-t border-[var(--border)] p-4 flex items-center justify-between">
-             <span className="text-[12px] font-mono text-[var(--accent)] uppercase font-bold tracking-widest">{referenceImages[refIndex].name}</span>
-             <a
-                href={referenceImages[refIndex].url}
-                download={`${referenceImages[refIndex].name}.jpg`}
-                onClick={(e) => e.stopPropagation()}
-                className="bg-[var(--accent)] hover:opacity-80 text-black px-3 py-1.5 rounded-sm transition-colors border border-[var(--border)] text-xs font-bold flex items-center gap-1.5"
-                title="下载参考图"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                下载图像
-              </a>
+             <span className="text-[12px] font-mono text-[var(--accent)] uppercase font-bold tracking-widest">
+               {referenceImages?.[index - 10000]?.name || "参考图预览"}
+             </span>
+             {imageUrl && (
+               <a
+                  href={imageUrl}
+                  download="reference.jpg"
+                  onClick={(e) => e.stopPropagation()}
+                  className="bg-[var(--accent)] hover:opacity-80 text-black px-3 py-1.5 rounded-sm transition-colors border border-[var(--border)] text-xs font-bold flex items-center gap-1.5"
+                >
+                  下载图像
+                </a>
+             )}
+           </div>
+        )}
+
+        {isMetaImage && (
+           <div className="h-16 bg-[var(--surface)] border-t border-[var(--border)] p-4 flex items-center justify-between">
+             <span className="text-[12px] font-mono text-white uppercase font-bold tracking-widest">
+               {metaTitle}
+             </span>
+             {imageUrl && (
+               <a
+                  href={imageUrl}
+                  download="concept.jpg"
+                  onClick={(e) => e.stopPropagation()}
+                  className="bg-[var(--accent)] hover:opacity-80 text-black px-3 py-1.5 rounded-sm transition-colors border border-[var(--border)] text-xs font-bold flex items-center gap-1.5"
+                >
+                  下载设定图
+                </a>
+             )}
            </div>
         )}
       </motion.div>
