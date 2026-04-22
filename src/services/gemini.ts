@@ -33,6 +33,8 @@ export interface StoryboardFrame {
   visualDescription: string;
   audioVoiceover: string;
   composition: string;
+  shotType?: string;      // 新增景别字段
+  cameraMovement?: string; // 新增镜头动作字段
 }
 
 export interface AnalysisResult {
@@ -40,6 +42,52 @@ export interface AnalysisResult {
   scenes: Scene[];
   props: Prop[];
   storyboard: StoryboardFrame[];
+}
+
+/**
+ * 使用 Ollama 智能扩写/优化实体提示词
+ */
+export async function optimizeEntityPrompt(
+  baseUrl: string,
+  modelName: string,
+  type: 'character' | 'scene' | 'prop',
+  entity: any,
+  context: string
+): Promise<string> {
+  const prompt = `
+你是一位专业的电影视觉设计专家。
+请根据提供的【整体故事背景】和【基础描述】，为该【${type === 'character' ? '角色' : type === 'scene' ? '场景' : '道具'}】扩写一段极其详尽、具有高度一致性的视觉描述提示词。
+
+要求：
+1. 扩写内容应包含：具体的材质、质感、光影、颜色细节。
+2. 保持视觉一致性，确保描述与整体故事氛围相符。
+3. 请直接输出扩写后的【中文描述内容】，不要包含任何解释或开场白。
+
+【故事背景】：
+${context}
+
+【当前${type}基础信息】：
+${JSON.stringify(entity)}
+`.trim();
+
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: modelName,
+        prompt: prompt,
+        stream: false,
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Ollama 优化失败: ${response.statusText}`);
+    const result = await response.json();
+    return result.response?.trim() || "扩写失败";
+  } catch (err) {
+    console.error("Optimize failed", err);
+    return "扩写失败";
+  }
 }
 
 // Analysis: Gemini 3.1 Pro Preview (Member Quota)
@@ -57,11 +105,12 @@ export async function analyzeScript(script: string, referenceImages?: string[], 
       特别指令：
       1. 所有的输出内容必须使用【中文】。
       2. 不要 1:1 地将一句 VO 映射到一个画面。
-      3. 将故事细分为更细致的节奏：包括关键帧 (Keyframes) 和过渡帧 (Transition frames)。
+      3. 【重要】如果一段描述中出现了不同的场景/地点，必须强制拆分为不同的分镜帧。一个分镜提示词内不得出现两个及以上场景的描述。
       4. 电影感节奏：使用多样的构图（特写、全景、过肩、倾斜镜头、第一人称视角等）。
-      5. 视觉一致性：根据你自己提取的元数据，极其详尽地描述角色和道具。
-      6. 动态数量：根据画面视觉复杂度决定分镜数量，而不是根据句子数量。 
-      
+      5. 视觉一致性：分析结果中角色、场景、道具等全局性提示词必须智能划分并写入到相应分镜的视觉描述 (visualDescription) 中，以确保一致性。
+      6. 【重要格式】：每一帧的分镜视觉描述（visualDescription）开头必须智能添加【景别、镜头、画面风格】，并用逗号隔开。此要求严禁省略。
+      7. 【新增字段】：为每个分镜提取出纯粹的景别 (shotType, 如特写/全景) 和镜头运动 (cameraMovement, 如摇镜头/固定)。
+      8. 动态数量：根据画面视觉复杂度决定分镜数量。      
       剧本内容：${script}
     `.trim() }
   ];
@@ -133,8 +182,10 @@ export async function analyzeScript(script: string, referenceImages?: string[], 
                   visualDescription: { type: Type.STRING },
                   audioVoiceover: { type: Type.STRING },
                   composition: { type: Type.STRING },
+                  shotType: { type: Type.STRING },
+                  cameraMovement: { type: Type.STRING },
                 },
-                required: ["frameNumber", "visualDescription", "audioVoiceover", "composition"],
+                required: ["frameNumber", "visualDescription", "audioVoiceover", "composition", "shotType", "cameraMovement"],
               },
             },
           },
@@ -179,13 +230,15 @@ export async function analyzeOllamaScript(
 特别指令：
 1. 所有的输出内容必须使用【中文】。
 2. 不要 1:1 地将一句 VO 映射到一个画面，要细分节奏使用多样的电影构图。
-3. 视觉一致性：根据你自己提取的元数据，极其详尽地描述角色和道具。
-4. 【重要】你的输出必须且只能为纯粹的JSON（不要用Markdown格式），完全匹配以下结构：
+3. 【强制拆分场景】：如果一段描述中出现了不同的场景或地点，必须将其拆分为对应的多个分镜帧。一个分镜提示词内【绝对不得】出现两个及以上场景的描述。
+4. 视觉一致性：分析结果中角色、场景、道具等全局性提示词必须智能划分并写入到相应分镜的视觉描述 (visualDescription) 中，以确保一致性。
+5. 【重要格式】：每一帧的分镜视觉描述（visualDescription）开头必须智能添加【景别、镜头、画面风格】，并用逗号隔开。此要求严禁省略。
+6. 【重要】你的输出必须且只能为纯粹的JSON（不要用Markdown格式），完全匹配以下结构：
 {
   "characters": [{ "name": "...", "description": "...", "clothing": "...", "makeup": "..." }],
   "props": [{ "name": "...", "description": "...", "usage": "..." }],
-  "scenes": [{ "name": "...", "setting": "...", "lighting": "...", "atmosphere": "..." }],
-  "storyboard": [{ "frameNumber": 1, "visualDescription": "...", "audioVoiceover": "...", "composition": "..." }]
+  "scenes": [{ "name": "...", "setting": "...", "lighting": "...", "atmosphere": "...", "shotType": "...", "cameraMovement": "..." }],
+  "storyboard": [{ "frameNumber": 1, "visualDescription": "...", "audioVoiceover": "...", "composition": "...", "shotType": "...", "cameraMovement": "..." }]
 }
 
 剧本内容：
@@ -234,7 +287,9 @@ export async function generateComfyUIFrame(
   description: string,
   globalStyle?: string,
   isBatchMode: boolean = false,
-  samplerConfig?: { promptWeight?: string, samplerName?: string, steps?: string }
+  samplerConfig?: { promptWeight?: string, samplerName?: string, steps?: string },
+  referenceImages?: { id: string, url: string, name: string }[],
+  aspectRatio: string = "16:9"
 ): Promise<string[]> {
   const workflow = JSON.parse(workflowStr);
   let fullPrompt = globalStyle ? `${description}, ${globalStyle}` : description;
@@ -242,6 +297,28 @@ export async function generateComfyUIFrame(
   if (!isBatchMode) {
     // Strip line breaks for single generations to prevent string splitters from batching
     fullPrompt = fullPrompt.replace(/\r\n|\n|\r/g, ', ');
+  }
+
+  // Inject Aspect Ratio resolution logic
+  const resolutionsMap: Record<string, { w: number, h: number }> = {
+    "1:1": { w: 1024, h: 1024 },
+    "16:9": { w: 1344, h: 768 },
+    "9:16": { w: 768, h: 1344 },
+    "4:3": { w: 1152, h: 896 },
+    "3:4": { w: 896, h: 1152 },
+    "21:9": { w: 1536, h: 640 },
+  };
+  const size = resolutionsMap[aspectRatio] || { w: 1344, h: 768 };
+
+  // Find all EmptyLatentImage nodes and inject correct widths/heights
+  for (const key in workflow) {
+    const node = workflow[key];
+    if (node?.class_type === "EmptyLatentImage" || node?.class_type === "SDXLEmptyLatentImage") {
+      if (node.inputs) {
+        if (node.inputs.width !== undefined) node.inputs.width = size.w;
+        if (node.inputs.height !== undefined) node.inputs.height = size.h;
+      }
+    }
   }
 
   // Auto-traverse to find the root text provision node if the provided node relies on links
@@ -324,6 +401,46 @@ export async function generateComfyUIFrame(
     // to prevent workflows with hardcoded batch sizes from wasting iterations
     if (!isBatchMode && node.inputs.batch_size !== undefined && !Array.isArray(node.inputs.batch_size)) {
       node.inputs.batch_size = 1;
+    }
+  }
+
+  // Handle uploading and replacing Reference Images for I2I workflows
+  if (referenceImages && referenceImages.length > 0) {
+    const uploadedNames: string[] = [];
+    
+    // 1. Upload images
+    for (let i = 0; i < referenceImages.length; i++) {
+        const img = referenceImages[i];
+        if (!img.url.startsWith("data:image")) continue; // Only handle base64 for reliable uploads
+        
+        try {
+            const blob = await (await fetch(img.url)).blob();
+            const formData = new FormData();
+            formData.append("image", blob, `ref_${Date.now()}_${i}.png`);
+            
+            const uploadRes = await fetch(`${baseUrl.replace(/\/$/, '')}/upload/image`, {
+                method: "POST",
+                body: formData
+            });
+            if (uploadRes.ok) {
+                const { name } = await uploadRes.json();
+                if (name) uploadedNames.push(name);
+            }
+        } catch (e) {
+            console.error("Failed to upload reference image to ComfyUI", e);
+        }
+    }
+    
+    // 2. Map uploaded names to LoadImage nodes, prioritizing LoadImage class
+    if (uploadedNames.length > 0) {
+        let nameIdx = 0;
+        for (const key in workflow) {
+            const node = workflow[key];
+            if (node?.class_type === "LoadImage" && node.inputs && node.inputs.image !== undefined) {
+                node.inputs.image = uploadedNames[nameIdx % uploadedNames.length];
+                nameIdx++;
+            }
+        }
     }
   }
 

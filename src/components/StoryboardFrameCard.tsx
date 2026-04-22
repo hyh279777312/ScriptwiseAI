@@ -15,10 +15,11 @@ interface Props {
   projectContext?: string;
   aspectRatio?: string;
   engineConfigs?: {
-    engine: "gemini" | "comfyui";
+    engine: "gemini" | "comfyui_t2i" | "comfyui_i2i" | "comfyui_i2i_prompt";
     comfyUrl: string;
     comfyNodeId: string;
     comfyWorkflow: string;
+    referenceImages?: { id: string, url: string, name: string }[];
   };
   customApiKey?: string;
   key?: any;
@@ -39,6 +40,25 @@ export function StoryboardFrameCard({
 }: Props) {
   const [isGenerating, setIsGenerating] = useState(false);
 
+  const buildFinalPrompt = () => {
+    let finalPrompt = frame.visualDescription;
+    
+    // Prepend: [景别], [镜头动作], [画面构图]
+    const prefix = [frame.shotType, frame.cameraMovement, frame.composition].filter(Boolean).join(", ");
+    if (prefix) finalPrompt = `${prefix}, ${finalPrompt}`;
+
+    // Append Global context
+    if (projectContext) {
+      finalPrompt = `${finalPrompt}\n\n[Context]: ${projectContext}`;
+    }
+
+    // Append Styles
+    const styleSuffix = [globalStyle, aspectRatio].filter(Boolean).join(", ");
+    if (styleSuffix) finalPrompt = `${finalPrompt}\n\n[Output Specs]: ${styleSuffix}`;
+
+    return finalPrompt;
+  };
+
   const handleGenerate = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onGenerateImage) return;
@@ -48,21 +68,26 @@ export function StoryboardFrameCard({
     const maxRetries = 4;
     const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+    const finalPrompt = buildFinalPrompt();
+
     while (retries <= maxRetries) {
       try {
         let url;
-        if (engineConfigs?.engine === "comfyui") {
+        if (engineConfigs?.engine?.startsWith("comfyui")) {
+          const isI2I = engineConfigs.engine === "comfyui_i2i" || engineConfigs.engine === "comfyui_i2i_prompt";
           const urls = await generateComfyUIFrame(
             engineConfigs.comfyUrl,
             engineConfigs.comfyWorkflow,
             engineConfigs.comfyNodeId,
-            frame.visualDescription,
-            globalStyle,
-            false // isBatchMode
+            finalPrompt,
+            "", // Style already in finalPrompt
+            false, // isBatchMode
+            undefined, // sampler config
+            isI2I ? engineConfigs.referenceImages : undefined
           );
           url = urls[0];
         } else {
-          url = await generateFrameImage(frame.visualDescription, isHighQuality, globalStyle, projectContext, aspectRatio, customApiKey);
+          url = await generateFrameImage(finalPrompt, isHighQuality, "", "", aspectRatio, customApiKey);
         }
         onGenerateImage(frame.frameNumber, url);
         break; 
@@ -126,13 +151,24 @@ export function StoryboardFrameCard({
         {!isGenerating && (
           <div className="absolute top-1 right-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             {imageUrl && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onPreview?.(frame.frameNumber); }}
-                className="bg-black/80 hover:bg-[var(--accent)] hover:text-black text-white p-1.5 rounded-sm transition-colors border border-[var(--border)]"
-                title="放大预览"
-              >
-                <ImageIcon className="w-3 h-3" />
-              </button>
+              <>
+                <a
+                  href={imageUrl}
+                  download={`frame_${frame.frameNumber.toString().padStart(2, '0')}.jpg`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="bg-black/80 hover:bg-[var(--accent)] hover:text-black text-white p-1.5 rounded-sm transition-colors border border-[var(--border)]"
+                  title="下载图片"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                </a>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onPreview?.(frame.frameNumber); }}
+                  className="bg-black/80 hover:bg-[var(--accent)] hover:text-black text-white p-1.5 rounded-sm transition-colors border border-[var(--border)]"
+                  title="放大预览"
+                >
+                  <ImageIcon className="w-3 h-3" />
+                </button>
+              </>
             )}
             <button
               onClick={handleGenerate}
@@ -147,6 +183,10 @@ export function StoryboardFrameCard({
 
       <div className="h-[90px] p-2 bg-[var(--surface)] border-t border-[var(--border)] flex flex-col justify-between">
         <div className="flex-1 overflow-y-auto mb-2 custom-scrollbar">
+          <div className="flex gap-1 mb-1 items-center">
+             <span className="text-[8px] bg-[#111] text-[var(--accent)] px-1 rounded-sm border border-[var(--border)]">{frame.shotType || "智能景别"}</span>
+             <span className="text-[8px] bg-[#111] text-[var(--accent)] px-1 rounded-sm border border-[var(--border)]">{frame.cameraMovement || "固定镜头"}</span>
+          </div>
           <textarea
              value={frame.visualDescription}
              onChange={(e) => onUpdatePrompt?.(e.target.value)}

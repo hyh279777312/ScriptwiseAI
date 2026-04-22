@@ -40,7 +40,10 @@ import {
   EyeOff,
   User,
   LogIn,
-  LogOut
+  LogOut,
+  File,
+  FolderOpen,
+  Save
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -84,8 +87,28 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isAnalyzing]);
 
-  const buildPromptWithLayout = (basePrompt: string) => {
-    return layoutMode !== "智能自动" ? `[${layoutMode}] ${basePrompt}` : basePrompt;
+  const buildPromptWithLayout = (basePrompt: string, frame?: StoryboardFrame) => {
+    let finalPrompt = basePrompt;
+    
+    if (frame) {
+      // 头部注入：[景别], [镜头动作], [画面构图]
+      const prefix = [frame.shotType, frame.cameraMovement, frame.composition].filter(Boolean).join(", ");
+      if (prefix) finalPrompt = `${prefix}, ${finalPrompt}`;
+    } else if (layoutMode !== "智能自动") {
+      finalPrompt = `[${layoutMode}] ${finalPrompt}`;
+    }
+
+    // 智能划分一致性信息 (角色、场景、道具)
+    const context = getProjectContext();
+    if (context) {
+       finalPrompt = `${finalPrompt}\n\n[Consistency Context]: ${context}`;
+    }
+
+    // 尾部注入：全局风格, 提示词设置中的自定义风格, 比例
+    const globalSettings = [globalStyle, customStyle, aspectRatio].filter(Boolean).join(", ");
+    if (globalSettings) finalPrompt = `${finalPrompt}\n\n[Style & Output]: ${globalSettings}`;
+
+    return finalPrompt;
   };
 
   const currentSamplerConfig = {
@@ -100,7 +123,7 @@ export default function App() {
     try {
       let prompt = "";
       if (type === 'character') {
-        prompt = `Character Concept Art: ${item.name}. ${item.description}. Wearing: ${item.clothing}. Makeup/Style: ${item.makeup}. Professional character design sheet, neutral background, centered subject, highly detailed.`;
+        prompt = `Character Concept Art: ${item.name}. ${item.description}. Wearing: ${item.clothing}. Makeup/Style: ${item.makeup}. Professional character design sheet, neutral background, layout requirement: Left 1/3 of the image is a highly detailed front face close-up, right 2/3 of the image shows full body front view, side view, and back view. Top right corner contains 9 different micro-expressions (joy, anger, sorrow, happiness, etc.). highly detailed.`;
       } else if (type === 'scene') {
         prompt = `Environment Concept Art: ${item.name}. Setting: ${item.setting}. Lighting: ${item.lighting}. Atmosphere: ${item.atmosphere}. Establishing shot, cinematic lighting, highly detailed environment design.`;
       } else if (type === 'prop') {
@@ -110,7 +133,8 @@ export default function App() {
       prompt = buildPromptWithLayout(prompt);
 
       let url;
-      if (selectedEngine === "comfyui") {
+      if (selectedEngine.startsWith("comfyui")) {
+        const isI2I = selectedEngine === "comfyui_i2i" || selectedEngine === "comfyui_i2i_prompt";
         const { generateComfyUIFrame } = await import("./services/gemini");
         const urls = await generateComfyUIFrame(
           comfyUrl,
@@ -119,7 +143,9 @@ export default function App() {
           prompt,
           customStyle || globalStyle,
           false,
-          currentSamplerConfig
+          currentSamplerConfig,
+          isI2I ? referenceImages : undefined,
+          aspectRatio
         );
         url = urls[0];
       } else {
@@ -128,7 +154,7 @@ export default function App() {
           isHighQuality,
           globalStyle,
           getProjectContext(),
-          "16:9",
+          aspectRatio,
           customApiKey
         );
       }
@@ -182,15 +208,19 @@ export default function App() {
   const [globalStyle, setGlobalStyle] = useState("Cinematic Movie");
   const [customStyle, setCustomStyle] = useState("");
   const [aspectRatio, setAspectRatio] = useState("16:9");
-  const [resolution, setResolution] = useState("1080P");
+  
+  // Project Management States
+  const [projectName, setProjectName] = useState("未命名工程");
+  const [fileHandle, setFileHandle] = useState<any>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   
   // Analysis Engine configurations
-  const [analysisEngine, setAnalysisEngine] = useState<"gemini" | "ollama">("gemini");
+  const [analysisEngine, setAnalysisEngine] = useState<"gemini" | "ollama">("ollama");
   const [analysisOllamaUrl, setAnalysisOllamaUrl] = useState("http://127.0.0.1:11434");
-  const [analysisOllamaModel, setAnalysisOllamaModel] = useState("qwen:latest");
+  const [analysisOllamaModel, setAnalysisOllamaModel] = useState("qwen3-coder:30b");
 
   // Image Generation Engine configurations
-  const [selectedEngine, setSelectedEngine] = useState<"gemini" | "comfyui">("gemini");
+  const [selectedEngine, setSelectedEngine] = useState<"gemini" | "comfyui_t2i" | "comfyui_i2i" | "comfyui_i2i_prompt">("comfyui_t2i");
   const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
   const [comfyNodeId, setComfyNodeId] = useState("6");
   const [comfyBatchMode, setComfyBatchMode] = useState(false);
@@ -259,6 +289,211 @@ export default function App() {
   const [gridPage, setGridPage] = useState(0);
   const [isGridExporting, setIsGridExporting] = useState(false);
   const [gridImageUrls, setGridImageUrls] = useState<Record<number, string[]>>({});
+  const [isOptimizing, setIsOptimizing] = useState<string | null>(null);
+
+  // Project Management Logic
+  const getProjectData = () => ({
+    projectName,
+    script,
+    referenceImages,
+    results,
+    frameImages,
+    globalStyle,
+    customStyle,
+    aspectRatio,
+    analysisEngine,
+    analysisOllamaUrl,
+    analysisOllamaModel,
+    selectedEngine,
+    comfyUrl,
+    comfyNodeId,
+    comfyBatchMode,
+    comfyBatchSeparator,
+    comfyWorkflow,
+    customApiKey,
+    layoutMode,
+    promptWeight,
+    samplerName,
+    samplingSteps
+  });
+
+  const loadProjectData = (data: any) => {
+    if (data.projectName !== undefined) setProjectName(data.projectName);
+    if (data.script !== undefined) setScript(data.script);
+    if (data.referenceImages !== undefined) setReferenceImages(data.referenceImages);
+    if (data.results !== undefined) setResults(data.results);
+    if (data.frameImages !== undefined) setFrameImages(data.frameImages);
+    if (data.globalStyle !== undefined) setGlobalStyle(data.globalStyle);
+    if (data.customStyle !== undefined) setCustomStyle(data.customStyle);
+    if (data.aspectRatio !== undefined) setAspectRatio(data.aspectRatio);
+    if (data.analysisEngine !== undefined) setAnalysisEngine(data.analysisEngine);
+    if (data.analysisOllamaUrl !== undefined) setAnalysisOllamaUrl(data.analysisOllamaUrl);
+    if (data.analysisOllamaModel !== undefined) setAnalysisOllamaModel(data.analysisOllamaModel);
+    if (data.selectedEngine !== undefined) setSelectedEngine(data.selectedEngine);
+    if (data.comfyUrl !== undefined) setComfyUrl(data.comfyUrl);
+    if (data.comfyNodeId !== undefined) setComfyNodeId(data.comfyNodeId);
+    if (data.comfyBatchMode !== undefined) setComfyBatchMode(data.comfyBatchMode);
+    if (data.comfyBatchSeparator !== undefined) setComfyBatchSeparator(data.comfyBatchSeparator);
+    if (data.comfyWorkflow !== undefined) setComfyWorkflow(data.comfyWorkflow);
+    if (data.customApiKey !== undefined) setCustomApiKey(data.customApiKey);
+    if (data.layoutMode !== undefined) setLayoutMode(data.layoutMode);
+    if (data.promptWeight !== undefined) setPromptWeight(data.promptWeight);
+    if (data.samplerName !== undefined) setSamplerName(data.samplerName);
+    if (data.samplingSteps !== undefined) setSamplingSteps(data.samplingSteps);
+  };
+
+  useEffect(() => {
+    setHasUnsavedChanges(true);
+  }, [script, referenceImages, results, frameImages, globalStyle, customStyle, aspectRatio, projectName]);
+
+  useEffect(() => {
+    if (!fileHandle || !hasUnsavedChanges) return;
+    const timer = setTimeout(async () => {
+      try {
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(getProjectData(), null, 2));
+        await writable.close();
+        setHasUnsavedChanges(false);
+      } catch (err) {
+        console.error("Auto-save to file failed", err);
+      }
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [fileHandle, hasUnsavedChanges, script, referenceImages, results, frameImages, globalStyle, customStyle, aspectRatio, projectName, analysisEngine, selectedEngine, comfyWorkflow, layoutMode]);
+
+  const handleNewProject = () => {
+    if (hasUnsavedChanges && !window.confirm("当前工程有未保存的修改，确定要新建吗？")) return;
+    setProjectName("未命名工程");
+    setFileHandle(null);
+    setScript("");
+    setReferenceImages([]);
+    setResults(null);
+    setFrameImages({});
+    setCustomStyle("");
+    setTimeout(() => setHasUnsavedChanges(false), 50);
+  };
+
+  const fallbackOpenProject = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.aiproj,application/json';
+    input.onchange = (e: any) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (re) => {
+        if (re.target?.result) loadProjectData(JSON.parse(re.target.result as string));
+        setTimeout(() => setHasUnsavedChanges(false), 50);
+        setFileHandle(null);
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
+
+  const handleOpenProject = async () => {
+    if (hasUnsavedChanges && !window.confirm("当前工程有未保存的修改，确定要打开新工程吗？")) return;
+    
+    if ('showOpenFilePicker' in window) {
+      try {
+        const [handle] = await (window as any).showOpenFilePicker({
+          types: [{ description: 'AI Studio Project', accept: { 'application/json': ['.aiproj'] } }]
+        });
+        const file = await handle.getFile();
+        const content = await file.text();
+        loadProjectData(JSON.parse(content));
+        setFileHandle(handle);
+        setTimeout(() => setHasUnsavedChanges(false), 50);
+        return;
+      } catch (err: any) {
+        if (err.name === 'AbortError') return; // User cancelled
+        console.warn("showOpenFilePicker failed (likely iframe restriction), attempting fallback:", err);
+      }
+    }
+    fallbackOpenProject();
+  };
+
+  const handleSaveProject = async () => {
+    if (fileHandle) {
+      try {
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(getProjectData(), null, 2));
+        await writable.close();
+        setHasUnsavedChanges(false);
+      } catch (err) {
+        console.error("Save failed", err);
+        alert("保存失败: " + String(err));
+      }
+    } else {
+      handleSaveAsProject();
+    }
+  };
+
+  const fallbackSaveAsProject = () => {
+    const blob = new Blob([JSON.stringify(getProjectData(), null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${projectName || 'project'}.aiproj`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setHasUnsavedChanges(false);
+  };
+
+  const handleSaveAsProject = async () => {
+    if ('showSaveFilePicker' in window) {
+      try {
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: `${projectName || 'project'}.aiproj`,
+          types: [{ description: 'AI Studio Project', accept: { 'application/json': ['.aiproj'] } }]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(JSON.stringify(getProjectData(), null, 2));
+        await writable.close();
+        setFileHandle(handle);
+        setHasUnsavedChanges(false);
+        return;
+      } catch (err: any) {
+        if (err.name === 'AbortError') return; // User cancelled
+        console.warn("showSaveFilePicker failed (likely iframe restriction), attempting fallback:", err);
+      }
+    }
+    fallbackSaveAsProject();
+  };
+
+  const handleOptimizePrompt = async (type: 'character' | 'scene' | 'prop', index: number) => {
+    if (!results) return;
+    const key = `${type}-${index}`;
+    setIsOptimizing(key);
+    
+    try {
+      const item = type === 'character' ? results.characters[index] : type === 'scene' ? results.scenes[index] : results.props[index];
+      const storyContext = script;
+      
+      const { optimizeEntityPrompt } = await import("./services/gemini");
+      const optimized = await optimizeEntityPrompt(
+        analysisOllamaUrl,
+        analysisOllamaModel,
+        type,
+        item,
+        storyContext
+      );
+      
+      if (optimized && optimized !== "扩写失败") {
+        if (type === 'character') {
+          updateCharacter(index, "description", optimized);
+        } else if (type === 'scene') {
+          updateScene(index, "setting", optimized);
+        } else if (type === 'prop') {
+          updateProp(index, "description", optimized);
+        }
+      }
+    } catch (err) {
+      console.error("Optimization failed", err);
+    } finally {
+      setIsOptimizing(null);
+    }
+  };
   const gridCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isExtractingDoc, setIsExtractingDoc] = useState(false);
   const [rawAnalysisText, setRawAnalysisText] = useState("");
@@ -279,13 +514,6 @@ export default function App() {
     { label: "16:9", value: "16:9" },
     { label: "4:3", value: "4:3" },
     { label: "9:16", value: "9:16" },
-  ];
-
-  const resolutions = [
-    { label: "720P", value: "720P" },
-    { label: "960P", value: "960P" },
-    { label: "1080P", value: "1080P" },
-    { label: "2160P", value: "2160P" },
   ];
 
   const handleFileChange = (e: any) => {
@@ -488,7 +716,8 @@ export default function App() {
     const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
     // -- BATCH MODE EXPERIMENT FOR COMFYUI --
-    if (selectedEngine === "comfyui" && comfyBatchMode) {
+    if (selectedEngine.startsWith("comfyui") && comfyBatchMode) {
+      const isI2I = selectedEngine === "comfyui_i2i" || selectedEngine === "comfyui_i2i_prompt";
       setGenStatus(`正在批量发送请求到 ComfyUI 队列 (${pendingFrames.length}张图)...`);
       try {
         const actualSeparator = comfyBatchSeparator.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
@@ -505,7 +734,9 @@ export default function App() {
           combinedPrompt,
           "", // Style is already combined above
           true, // isBatchMode
-          currentSamplerConfig
+          currentSamplerConfig,
+          isI2I ? referenceImages : undefined,
+          aspectRatio
         );
         
         const newImages = { ...frameImages };
@@ -538,21 +769,24 @@ export default function App() {
       while (retries <= maxRetries) {
         try {
           let url;
-          if (selectedEngine === "comfyui") {
+          if (selectedEngine.startsWith("comfyui")) {
+            const isI2I = selectedEngine === "comfyui_i2i" || selectedEngine === "comfyui_i2i_prompt";
             const { generateComfyUIFrame } = await import("./services/gemini");
             const urls = await generateComfyUIFrame(
               comfyUrl,
               comfyWorkflow,
               comfyNodeId,
-              buildPromptWithLayout(frame.visualDescription),
+              buildPromptWithLayout(frame.visualDescription, frame),
               customStyle || globalStyle,
               false, // isBatchMode
-              currentSamplerConfig
+              currentSamplerConfig,
+              isI2I ? referenceImages : undefined,
+              aspectRatio
             );
             url = urls[0];
           } else {
             url = await generateFrameImage(
-              buildPromptWithLayout(frame.visualDescription), 
+              buildPromptWithLayout(frame.visualDescription, frame), 
               isHighQuality, 
               customStyle || globalStyle,
               getProjectContext(),
@@ -686,26 +920,47 @@ export default function App() {
 
       <main className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-[420px] 2xl:w-[500px] bg-[var(--surface)] border-r border-[var(--border)] flex flex-col p-4 gap-6 overflow-y-auto custom-scrollbar flex-shrink-0">
-          <div>
-            <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex justify-between">
-              <span>输入剧本/梗概</span>
-              {isExtractingDoc && <span className="opacity-70 animate-pulse text-[10px] mt-0.5">解析中...</span>}
-            </div>
-            <div 
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleScriptDrop}
-              className="relative"
-            >
-              <textarea
-                value={script}
-                onChange={(e) => setScript(e.target.value)}
-                placeholder="在这里输入您的故事脚本，或拖拽 txt/md/pdf/docx 文档至此..."
-                disabled={isExtractingDoc}
-                className="w-full h-48 bg-[#111] border border-[var(--border)] rounded p-3 text-sm text-white outline-none focus:border-[var(--accent)] transition-colors resize-none font-sans leading-relaxed disabled:opacity-50"
+        <aside className="w-[420px] 2xl:w-[500px] bg-[var(--surface)] border-r border-[var(--border)] flex flex-col overflow-y-auto custom-scrollbar flex-shrink-0">
+          {/* Project Management Header */}
+          <div className="p-4 border-b border-[var(--border)] bg-[#1a1c1f]">
+            <div className="flex items-center justify-between mb-2">
+              <input
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                placeholder="未命名工程"
+                className="bg-transparent border-none outline-none text-sm font-bold text-[var(--accent)] uppercase tracking-widest placeholder:text-gray-600 w-full"
               />
+              <span className={`text-[10px] w-14 text-right flex-shrink-0 ${hasUnsavedChanges ? 'text-amber-500' : 'text-green-500'}`}>
+                {hasUnsavedChanges ? "未保存" : "已保存"}
+              </span>
+            </div>
+            <div className="flex gap-1.5">
+              <button onClick={handleNewProject} title="新建工程" className="p-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors tooltip flex-1 flex justify-center"><File className="w-4 h-4" /></button>
+              <button onClick={handleOpenProject} title="打开工程" className="p-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors tooltip flex-1 flex justify-center"><FolderOpen className="w-4 h-4" /></button>
+              <button onClick={handleSaveProject} title="保存" className="p-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors tooltip flex-1 flex justify-center"><Save className="w-4 h-4" /></button>
+              <button onClick={handleSaveAsProject} title="另存为" className="text-[10px] px-2 py-1.5 bg-[#111] border border-[var(--border)] rounded hover:bg-[var(--accent)] hover:text-black transition-colors uppercase font-bold flex-[2]">另存为本地</button>
             </div>
           </div>
+
+          <div>
+            <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2 flex justify-between">
+                <span>输入剧本/梗概</span>
+                {isExtractingDoc && <span className="opacity-70 animate-pulse text-[10px] mt-0.5">解析中...</span>}
+              </div>
+              <div 
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={handleScriptDrop}
+                className="relative"
+              >
+                <textarea
+                  value={script}
+                  onChange={(e) => setScript(e.target.value)}
+                  placeholder="在这里输入您的故事脚本，或拖拽 txt/md/pdf/docx 文档至此..."
+                  disabled={isExtractingDoc}
+                  className="w-full h-48 bg-[#111] border border-[var(--border)] rounded p-3 text-sm text-white outline-none focus:border-[var(--accent)] transition-colors resize-none font-sans leading-relaxed disabled:opacity-50"
+                />
+              </div>
+            </div>
 
           <div
             onDragOver={(e) => e.preventDefault()}
@@ -714,7 +969,7 @@ export default function App() {
             <div className="text-sm uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-2">视觉参考图 <span className="text-xs opacity-40 font-normal">(支持拖拽)</span></div>
             <div className="grid grid-cols-3 gap-2 mb-3">
               {referenceImages.map((img, i) => (
-                <div key={img.id} className="relative aspect-square rounded border border-[var(--border)] overflow-hidden group">
+                <div key={img.id} className="relative aspect-square rounded border border-[var(--border)] overflow-hidden group cursor-pointer" onClick={() => setPreviewFrameIndex(10000 + i)}>
                   <img src={img.url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                   <div className="absolute bottom-0 left-0 right-0 bg-black/80 px-1 py-0.5 text-[8px] text-white truncate text-center opacity-80 group-hover:opacity-0 transition-opacity pointer-events-none">
                     {img.name}
@@ -723,6 +978,7 @@ export default function App() {
                     type="text" 
                     value={img.name}
                     title={img.name}
+                    onClick={(e) => e.stopPropagation()}
                     onChange={(e) => {
                       const newRef = [...referenceImages];
                       newRef[i].name = e.target.value;
@@ -731,11 +987,14 @@ export default function App() {
                     className="absolute bottom-0 left-0 w-full bg-black/80 text-[8px] text-white px-1 py-0.5 text-center outline-none opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
                   />
                   <button 
-                    onClick={() => removeImage(i)}
+                    onClick={(e) => { e.stopPropagation(); removeImage(i); }}
                     className="absolute top-1 right-1 bg-black/60 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                   >
                     <X className="w-3 h-3 text-white m-[2px]" />
                   </button>
+                  <div className="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                    <ImageIcon className="w-4 h-4 text-white drop-shadow-md" />
+                  </div>
                 </div>
               ))}
               <button
@@ -804,24 +1063,19 @@ export default function App() {
                 </button>
               ))}
             </div>
-
-            <div className="text-[10px] text-[var(--text-dim)] uppercase tracking-wide mb-1.5 mt-2 border-t border-gray-800 pt-2">分辨率</div>
-            <div className="flex flex-wrap gap-2 mb-1">
-              {resolutions.map((res) => (
-                <button
-                  key={res.label}
-                  onClick={() => setResolution(res.value)}
-                  className={`text-sm py-1.5 px-2 border rounded transition-all font-mono uppercase flex-1 whitespace-nowrap ${
-                    resolution === res.value
-                      ? "bg-[var(--accent)] text-black border-[var(--accent)] font-bold"
-                      : "bg-[#111] text-[var(--text-dim)] border-[var(--border)] hover:border-[var(--text-dim)]"
-                  }`}
-                >
-                  {res.label}
-                </button>
-              ))}
-            </div>
           </div>
+
+          <button
+            onClick={onAnalyze}
+            disabled={isAnalyzing || !script.trim()}
+            className="w-full py-3 bg-[var(--accent)] text-black rounded font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-4 shadow-[0_0_15px_rgba(205,255,0,0.15)]"
+          >
+            {isAnalyzing ? (
+              <Loader2 className="w-5 h-5 animate-spin mx-auto" />
+            ) : (
+              "开始智能分析"
+            )}
+          </button>
 
           <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded mt-4">
             <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">工作流引擎配置</div>
@@ -832,15 +1086,15 @@ export default function App() {
                 <Send className="w-3 h-3" />
                 1. 智能分析引擎 (分镜转换)
               </div>
-              <div className="flex gap-2 mb-2">
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" name="analysis_engine" value="gemini" checked={analysisEngine === "gemini"} onChange={() => setAnalysisEngine("gemini")} className="accent-[var(--accent)]" />
-                  <span className="text-xs text-white">Gemini 2.5 Pro</span>
-                </label>
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" name="analysis_engine" value="ollama" checked={analysisEngine === "ollama"} onChange={() => setAnalysisEngine("ollama")} className="accent-[var(--accent)]" />
-                  <span className="text-xs text-[var(--accent)]">本地 Ollama (大模型)</span>
-                </label>
+              <div className="mb-2">
+                <select
+                  value={analysisEngine}
+                  onChange={(e) => setAnalysisEngine(e.target.value as "gemini" | "ollama")}
+                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-[var(--accent)] outline-none focus:border-[var(--accent)] custom-scrollbar"
+                >
+                  <option value="ollama" className="text-white bg-[#111]">本地 Ollama (大模型)</option>
+                  <option value="gemini" className="text-[var(--text-dim)] bg-[#111]">Google Gemini 2.5 Pro</option>
+                </select>
               </div>
               {analysisEngine === "ollama" && (
                 <div className="space-y-2 p-2 bg-[#2a2c31] border border-[var(--border)] rounded mb-3">
@@ -862,33 +1116,22 @@ export default function App() {
                 <ImageIcon className="w-3 h-3" />
                 2. 画面生成引擎 (剧照渲染)
               </div>
-              <div className="flex gap-2 mb-2">
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="engine" 
-                    value="gemini" 
-                    checked={selectedEngine === "gemini"} 
-                    onChange={() => setSelectedEngine("gemini")}
-                    className="accent-[var(--accent)]"
-                  />
-                  <span className="text-xs text-white">Google Gemini (推荐)</span>
-                </label>
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input 
-                    type="radio" 
-                    name="engine" 
-                    value="comfyui" 
-                    checked={selectedEngine === "comfyui"} 
-                    onChange={() => setSelectedEngine("comfyui")}
-                    className="accent-[var(--accent)]"
-                  />
-                  <span className="text-xs text-[var(--accent)]">本地 ComfyUI</span>
-                </label>
+              <div className="mb-2">
+                <select
+                  value={selectedEngine}
+                  onChange={(e) => setSelectedEngine(e.target.value as "gemini" | "comfyui_t2i" | "comfyui_i2i" | "comfyui_i2i_prompt")}
+                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-[var(--accent)] outline-none focus:border-[var(--accent)] custom-scrollbar"
+                >
+                  <option value="gemini" className="text-white bg-[#111]">Google Gemini (推荐)</option>
+                  <option value="comfyui_t2i" className="text-[var(--accent)] bg-[#111]">ComfyUI 文生图</option>
+                  <option value="comfyui_i2i" className="text-[var(--accent)] bg-[#111]">ComfyUI 图生图</option>
+                  <option value="comfyui_i2i_prompt" className="text-[var(--accent)] bg-[#111]">ComfyUI 语义改图</option>
+                </select>
               </div>
 
-              {selectedEngine === "comfyui" && (
+              {selectedEngine.startsWith("comfyui") && (
                 <div className="space-y-2 mt-3 p-2 bg-[#2a2c31] border border-[var(--border)] rounded">
+                  {(selectedEngine === "comfyui_i2i" || selectedEngine === "comfyui_i2i_prompt") && <div className="text-[10px] text-[var(--accent)] font-mono leading-tight mb-2 italic">⚠️ 提示：请加载您的图生图工作流 (API JSON)，系统会自动上传参考图并替换工作流中的 LoadImage 节点图片为您关联设定的视觉参考图。</div>}
                   <div>
                     <label className="text-[10px] uppercase font-bold text-white opacity-60">API 地址 (需开启 --listen)</label>
                     <input
@@ -952,27 +1195,6 @@ export default function App() {
 
             <div className="text-sm uppercase font-bold text-white tracking-widest mb-3 mt-4 pt-4 border-t border-[var(--border)]">渲染参数</div>
             <div className="space-y-4 font-mono text-xs text-[var(--text-dim)]">
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center text-xs"><span>画面景别 (Shot Type)</span></div>
-                <div className="flex gap-2 text-[10px] flex-wrap">
-                  {["智能自动", "远景", "全景", "中景", "近景", "特写"].map(mode => (
-                    <button 
-                      key={mode} 
-                      onClick={() => setLayoutMode(mode)} 
-                      className={`px-2 py-1 rounded border transition-colors ${layoutMode === mode ? 'bg-[var(--accent)] text-black border-[var(--accent)]' : 'bg-[#111] text-white border-[var(--border)] hover:border-[var(--accent)]'}`}
-                    >
-                      {mode}
-                    </button>
-                  ))}
-                </div>
-                <input 
-                  type="text" 
-                  value={layoutMode} 
-                  onChange={(e) => setLayoutMode(e.target.value)} 
-                  className="w-full bg-[#111] border border-[var(--border)] rounded px-2 py-1.5 text-xs text-white outline-none focus:border-[var(--accent)] transition-colors mt-1 block" 
-                />
-              </div>
-
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center text-xs"><span>采样步数 (Steps)</span></div>
                 <div className="flex gap-2 text-[10px] flex-wrap">
@@ -1089,18 +1311,6 @@ export default function App() {
               </div>
             </div>
           </div>
-            
-          <button
-            onClick={onAnalyze}
-            disabled={isAnalyzing || !script.trim()}
-            className="w-full py-3 bg-[var(--accent)] text-black rounded font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-auto"
-          >
-            {isAnalyzing ? (
-              <Loader2 className="w-5 h-5 animate-spin mx-auto" />
-            ) : (
-              "开始智能分析"
-            )}
-          </button>
         </aside>
 
         {/* Content Area */}
@@ -1183,14 +1393,24 @@ export default function App() {
                             key={i} 
                             title={char.name}
                             headerRight={
-                              <button 
-                                onClick={() => generateMetaImage('character', char, i)}
-                                disabled={generatingMetaImage === `character-${i}`}
-                                className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
-                              >
-                                {generatingMetaImage === `character-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
-                                生图
-                              </button>
+                              <div className="flex items-center gap-1.5">
+                                <button 
+                                  onClick={() => handleOptimizePrompt('character', i)}
+                                  disabled={isOptimizing === `character-${i}`}
+                                  className="text-[10px] bg-[#222] border border-[var(--border)] text-[var(--accent)] px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
+                                >
+                                  {isOptimizing === `character-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <Sparkles className="w-3 h-3"/>}
+                                  优化
+                                </button>
+                                <button 
+                                  onClick={() => generateMetaImage('character', char, i)}
+                                  disabled={generatingMetaImage === `character-${i}`}
+                                  className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
+                                >
+                                  {generatingMetaImage === `character-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
+                                  生图
+                                </button>
+                              </div>
                             }
                           >
                             <textarea
@@ -1230,14 +1450,24 @@ export default function App() {
                             title={scene.name} 
                             className="border-l-2 border-l-[var(--accent)]"
                             headerRight={
-                              <button 
-                                onClick={() => generateMetaImage('scene', scene, i)}
-                                disabled={generatingMetaImage === `scene-${i}`}
-                                className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
-                              >
-                                {generatingMetaImage === `scene-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
-                                生图
-                              </button>
+                              <div className="flex items-center gap-1.5">
+                                <button 
+                                  onClick={() => handleOptimizePrompt('scene', i)}
+                                  disabled={isOptimizing === `scene-${i}`}
+                                  className="text-[10px] bg-[#222] border border-[var(--border)] text-[var(--accent)] px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
+                                >
+                                  {isOptimizing === `scene-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <Sparkles className="w-3 h-3"/>}
+                                  优化
+                                </button>
+                                <button 
+                                  onClick={() => generateMetaImage('scene', scene, i)}
+                                  disabled={generatingMetaImage === `scene-${i}`}
+                                  className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
+                                >
+                                  {generatingMetaImage === `scene-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
+                                  生图
+                                </button>
+                              </div>
                             }
                           >
                             <div className="mb-2">
@@ -1288,14 +1518,24 @@ export default function App() {
                                   />
                                   <Badge>道具</Badge>
                                 </div>
-                                <button 
-                                  onClick={() => generateMetaImage('prop', prop, i)}
-                                  disabled={generatingMetaImage === `prop-${i}`}
-                                  className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50 ml-2"
-                                >
-                                  {generatingMetaImage === `prop-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
-                                  生图
-                                </button>
+                                <div className="flex items-center gap-1.5 ml-2">
+                                  <button 
+                                    onClick={() => handleOptimizePrompt('prop', i)}
+                                    disabled={isOptimizing === `prop-${i}`}
+                                    className="text-[10px] bg-[#111] border border-[var(--border)] text-[var(--accent)] px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
+                                  >
+                                    {isOptimizing === `prop-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <Sparkles className="w-3 h-3"/>}
+                                    优化
+                                  </button>
+                                  <button 
+                                    onClick={() => generateMetaImage('prop', prop, i)}
+                                    disabled={generatingMetaImage === `prop-${i}`}
+                                    className="text-[10px] bg-[var(--accent)] text-black px-2 py-0.5 rounded flex items-center gap-1 hover:brightness-110 disabled:opacity-50"
+                                  >
+                                    {generatingMetaImage === `prop-${i}` ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3"/>}
+                                    生图
+                                  </button>
+                                </div>
                               </div>
                               <textarea
                                 value={prop.description}
@@ -1442,6 +1682,7 @@ export default function App() {
         index={previewFrameIndex}
         storyboard={results?.storyboard || []}
         images={frameImages}
+        referenceImages={referenceImages}
         onClose={() => setPreviewFrameIndex(null)}
         onNavigate={(newIndex) => setPreviewFrameIndex(newIndex)}
         onUpdate={updateStoryboardFrame}
@@ -1461,6 +1702,7 @@ function ImageModal({
   index, 
   storyboard, 
   images, 
+  referenceImages,
   onClose, 
   onNavigate,
   onUpdate
@@ -1468,13 +1710,25 @@ function ImageModal({
   index: number | null; 
   storyboard: StoryboardFrame[]; 
   images: Record<number, string>;
+  referenceImages?: { id: string, url: string, name: string }[];
   onClose: () => void;
   onNavigate: (index: number) => void;
-  onUpdate: (index: number, field: keyof StoryboardFrame, value: string | number) => void;
+  onUpdate?: (index: number, field: keyof StoryboardFrame, value: string | number) => void;
 }) {
   if (index === null) return null;
-  const frame = storyboard[index];
-  const imageUrl = images[frame.frameNumber];
+  
+  // Custom logic to handle reference image clicks
+  const isRefImage = index >= 10000;
+  const refIndex = isRefImage ? index - 10000 : 0;
+  const imageUrl = isRefImage 
+    ? (referenceImages?.[refIndex]?.url || "")
+    : images[storyboard[index]?.frameNumber];
+
+  const hasNext = isRefImage ? (referenceImages && refIndex < referenceImages.length - 1) : (index < storyboard.length - 1);
+  const hasPrev = isRefImage ? (refIndex > 0) : (index > 0);
+
+  const prevIndex = isRefImage ? index - 1 : index - 1;
+  const nextIndex = isRefImage ? index + 1 : index + 1;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-10 pointer-events-none">
@@ -1504,45 +1758,76 @@ function ImageModal({
           {imageUrl && (
             <img 
               src={imageUrl} 
-              alt={`Frame ${frame.frameNumber}`} 
+              alt={isRefImage ? `Reference ${refIndex}` : `Frame`} 
               className="max-w-full max-h-full object-contain"
               referrerPolicy="no-referrer"
             />
           )}
 
           <button 
-            disabled={index === 0}
-            onClick={(e) => { e.stopPropagation(); onNavigate(index - 1); }}
+            disabled={!hasPrev}
+            onClick={(e) => { e.stopPropagation(); onNavigate(prevIndex); }}
             className="absolute left-4 p-4 bg-white/5 hover:bg-white/10 rounded-full text-white transition-all disabled:opacity-0"
           >
             <ChevronLeft className="w-8 h-8" />
           </button>
 
           <button 
-            disabled={index === storyboard.length - 1}
-            onClick={(e) => { e.stopPropagation(); onNavigate(index + 1); }}
+            disabled={!hasNext}
+            onClick={(e) => { e.stopPropagation(); onNavigate(nextIndex); }}
             className="absolute right-4 p-4 bg-white/5 hover:bg-white/10 rounded-full text-white transition-all disabled:opacity-0"
           >
             <ChevronRight className="w-8 h-8" />
           </button>
         </div>
 
-        <div className="h-24 bg-[var(--surface)] border-t border-[var(--border)] p-4 flex flex-col justify-center">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="bg-[var(--accent)] text-black px-2 py-0.5 rounded text-[10px] font-bold font-mono">FRAME {frame.frameNumber}</span>
-            <input 
-              type="text"
-              value={frame.composition}
-              onChange={(e) => onUpdate(index, "composition", e.target.value)}
-              className="bg-transparent border-none text-[var(--text-dim)] text-[10px] font-mono tracking-tighter uppercase outline-none focus:text-white p-0 m-0"
+        {!isRefImage && storyboard[index] && onUpdate && (
+          <div className="h-24 bg-[var(--surface)] border-t border-[var(--border)] p-4 flex flex-col justify-center">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-2">
+                <span className="bg-[var(--accent)] text-black px-2 py-0.5 rounded text-[10px] font-bold font-mono">FRAME {storyboard[index].frameNumber}</span>
+                <input 
+                  type="text"
+                  value={storyboard[index].composition}
+                  onChange={(e) => onUpdate(index, "composition", e.target.value)}
+                  className="bg-transparent border-none text-[var(--text-dim)] text-[10px] font-mono tracking-tighter uppercase outline-none focus:text-white p-0 m-0"
+                />
+              </div>
+              {imageUrl && (
+                <a
+                  href={imageUrl}
+                  download={`frame_${storyboard[index].frameNumber.toString().padStart(2, '0')}.jpg`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-[var(--text-dim)] hover:text-white transition-colors p-1"
+                  title="下载图片"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                </a>
+              )}
+            </div>
+            <textarea 
+              value={storyboard[index].visualDescription}
+              onChange={(e) => onUpdate(index, "visualDescription", e.target.value)}
+              className="w-full bg-transparent border-none text-xs text-[var(--text-main)] italic opacity-80 leading-snug outline-none focus:opacity-100 resize-none h-12 p-0 m-0"
             />
           </div>
-          <textarea 
-            value={frame.visualDescription}
-            onChange={(e) => onUpdate(index, "visualDescription", e.target.value)}
-            className="w-full bg-transparent border-none text-xs text-[var(--text-main)] italic opacity-80 leading-snug outline-none focus:opacity-100 resize-none h-12 p-0 m-0"
-          />
-        </div>
+        )}
+        
+        {isRefImage && referenceImages?.[refIndex] && (
+           <div className="h-16 bg-[var(--surface)] border-t border-[var(--border)] p-4 flex items-center justify-between">
+             <span className="text-[12px] font-mono text-[var(--accent)] uppercase font-bold tracking-widest">{referenceImages[refIndex].name}</span>
+             <a
+                href={referenceImages[refIndex].url}
+                download={`${referenceImages[refIndex].name}.jpg`}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-[var(--accent)] hover:opacity-80 text-black px-3 py-1.5 rounded-sm transition-colors border border-[var(--border)] text-xs font-bold flex items-center gap-1.5"
+                title="下载参考图"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                下载图像
+              </a>
+           </div>
+        )}
       </motion.div>
     </div>
   );
