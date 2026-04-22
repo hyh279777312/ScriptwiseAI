@@ -241,7 +241,8 @@ export default function App() {
         frame.visualDescription,
         getProjectContext(),
         analysisEngine,
-        key
+        key,
+        { url: analysisOllamaUrl, model: analysisOllamaModel }
       );
       updateStoryboardFrame(index, "visualDescription", optimized);
     } catch (err) {
@@ -1870,7 +1871,6 @@ export default function App() {
                                       }
                                       setFrameImages(prev => ({ ...prev, [frame.frameNumber]: url }));
                                     }} className="text-[9px] bg-black text-white px-2 py-1 rounded">生图</button>
-                                  <button onClick={() => deleteRow('storyboard', i)} className="text-[9px] text-red-600">删除</button>
                                 </div>
                               </td>
                               <td className="bg-gray-50 flex items-center justify-center relative p-1 min-h-[120px]">

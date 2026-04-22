@@ -100,7 +100,8 @@ export async function optimizeStoryboardPrompt(
   visualDescription: string,
   context: string,
   engine: string = "gemini",
-  apiKey?: string
+  apiKey?: string,
+  ollamaConfig?: { url: string, model: string }
 ): Promise<string> {
   const prompt = `
     你是一位电影视觉大师和顶级提示词工程师。
@@ -126,6 +127,23 @@ export async function optimizeStoryboardPrompt(
         contents: { parts: [{ text: prompt }] },
       });
       return response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || visualDescription;
+    } else if (engine === "ollama") {
+      const baseUrl = ollamaConfig?.url || "http://127.0.0.1:11434";
+      const modelName = ollamaConfig?.model || "qwen3-coder:30b";
+      
+      const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: modelName,
+          prompt: prompt,
+          stream: false,
+        }),
+      });
+
+      if (!response.ok) throw new Error(`Ollama 优化失败: ${response.statusText}`);
+      const result = await response.json();
+      return result.response?.trim() || visualDescription;
     } else {
       // For GPT, Doubao or other LLMs
       const modelMap: Record<string, string> = {
