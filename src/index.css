@@ -38,3 +38,43 @@
     background: var(--text-dim);
   }
 }
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 0.5cm;
+  }
+  body {
+    background-color: white !important;
+    color: black !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  #analysis-export-container, 
+  #storyboard-export-container {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  table {
+    page-break-inside: auto;
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+  thead {
+    display: table-header-group;
+  }
+  input, textarea {
+    border: none !important;
+    background: transparent !important;
+    resize: none !important;
+  }
+}

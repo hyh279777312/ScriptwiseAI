@@ -258,7 +258,7 @@ export default function App() {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (resizingCol) {
-        const deltaX = e.clientX - resizingCol.startX;
+        const deltaX = (e.clientX - resizingCol.startX) / zoomScale;
         const newWidth = Math.max(40, resizingCol.startWidth + deltaX);
         if (resizingCol.table === 'storyboard') {
           setStoryboardColWidths(prev => ({ ...prev, [resizingCol.key]: newWidth }));
@@ -271,7 +271,7 @@ export default function App() {
         }
       }
       if (resizingRow) {
-        const deltaY = e.clientY - resizingRow.startY;
+        const deltaY = (e.clientY - resizingRow.startY) / zoomScale;
         const newHeight = Math.max(40, resizingRow.startHeight + deltaY);
         if (resizingRow.table === 'storyboard') {
           setStoryboardRowHeights(prev => ({ ...prev, [resizingRow.index]: newHeight }));
@@ -677,7 +677,7 @@ export default function App() {
     const id = activeTab === "analysis" ? "analysis-export-container" : "storyboard-export-container";
     
     // Wait for the scale transition and re-render
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 400));
     
     const element = document.getElementById(id);
     if (!element) {
@@ -692,12 +692,13 @@ export default function App() {
         useCORS: true,
         logging: false,
         backgroundColor: "#ffffff",
-        windowWidth: element.offsetWidth,
+        windowWidth: element.scrollWidth,
         allowTaint: true
       });
 
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF("p", "mm", "a4");
+      const imgData = canvas.toDataURL("image/jpeg", 0.95);
+      // Analysis is usually portrait, Storyboard (16:9) is landscape
+      const pdf = new jsPDF(activeTab === "analysis" ? "p" : "l", "mm", "a4");
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
       
@@ -708,14 +709,14 @@ export default function App() {
       let position = 0;
 
       // First page
-      pdf.addImage(imgData, "PNG", 0, position, pdfWidth, contentHeightInPdf);
+      pdf.addImage(imgData, "JPEG", 0, position, pdfWidth, contentHeightInPdf);
       heightLeft -= pdfHeight;
 
       // Additional pages
       while (heightLeft > 0) {
         position = heightLeft - contentHeightInPdf;
         pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, position, pdfWidth, contentHeightInPdf);
+        pdf.addImage(imgData, "JPEG", 0, position, pdfWidth, contentHeightInPdf);
         heightLeft -= pdfHeight;
       }
 
@@ -729,15 +730,48 @@ export default function App() {
   };
 
   const handleExportWord = async () => {
+    // Zoom out to 100% first to ensure all elements are properly positioned for clone
+    const originalScale = zoomScale;
+    setZoomScale(1);
+    await new Promise(r => setTimeout(r, 200));
+
     const id = activeTab === "analysis" ? "analysis-export-container" : "storyboard-export-container";
     const element = document.getElementById(id);
-    if (!element) return;
+    if (!element) {
+      setZoomScale(originalScale);
+      return;
+    }
 
     // Deep clone to avoid modifying live UI
     const clone = element.cloneNode(true) as HTMLElement;
     
+    // SYNC INPUT VALUES: CloneNode doesn't copy current value properties of inputs/textareas
+    const originalInputs = element.querySelectorAll('input, textarea');
+    const cloneInputs = clone.querySelectorAll('input, textarea');
+    originalInputs.forEach((input, idx) => {
+      const val = (input as HTMLInputElement | HTMLTextAreaElement).value;
+      const span = document.createElement('span');
+      span.innerText = val;
+      // Preserve basic appearance
+      if (input.tagName === 'TEXTAREA') {
+        span.style.whiteSpace = 'pre-wrap';
+        span.style.display = 'block';
+        span.style.width = '100%';
+        span.style.minHeight = '1.5em';
+      } else {
+        span.style.display = 'inline-block';
+        span.style.width = '100%';
+      }
+      if (cloneInputs[idx] && cloneInputs[idx].parentNode) {
+        cloneInputs[idx].parentNode!.replaceChild(span, cloneInputs[idx]);
+      }
+    });
+
     // Remove all no-print elements in clone
     clone.querySelectorAll('.no-print').forEach(el => el.remove());
+    
+    // Replace SVGs or complex icons if needed (Lucide icons are SVGs)
+    // Most Word versions prefer static text or images
     
     // Convert all images to base64 to ensure they are embedded in the Word doc
     const images = clone.getElementsByTagName('img');
@@ -745,7 +779,8 @@ export default function App() {
         const img = images[i];
         if (img.src && !img.src.startsWith('data:')) {
             try {
-                const response = await fetch(img.src);
+                // Use fallback for cross-origin images if they fail standard fetch
+                const response = await fetch(img.src, { mode: 'cors' });
                 const blob = await response.blob();
                 const reader = new FileReader();
                 const base64 = await new Promise<string>((resolve) => {
@@ -760,18 +795,9 @@ export default function App() {
     }
 
     const content = clone.innerHTML;
+    // Enhanced Word HTML header
     const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-                    <head><meta charset='utf-8'><title>Export</title>
-                    <style>
-                      @page { size: landscape; margin: 1in; }
-                      body { font-family: 'SimSun', 'Arial', sans-serif; }
-                      table { border-collapse: collapse; width: 100%; margin-bottom: 20px; border: 2px solid black; }
-                      th, td { border: 1px solid black; padding: 8px; vertical-align: top; }
-                      th { background-color: #f3f4f6; font-weight: bold; }
-                      h1, h2 { text-align: center; }
-                      .text-center { text-align: center; }
-                      img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
-                    </style>
+                    <head><meta charset='utf-8'><title>Script Export</title>
                     <!--[if gte mso 9]>
                     <xml>
                     <w:WordDocument>
@@ -781,14 +807,32 @@ export default function App() {
                     </w:WordDocument>
                     </xml>
                     <![endif]-->
+                    <style>
+                      @page { size: landscape; margin: 0.5in; mso-page-orientation: landscape; }
+                      body { font-family: 'SimSun', 'Microsoft YaHei', 'Arial', sans-serif; line-height: 1.4; color: black; }
+                      h1 { text-align: center; font-size: 22pt; margin-bottom: 15pt; }
+                      h2 { font-size: 16pt; margin-top: 15pt; margin-bottom: 8pt; border-bottom: 1px solid black; padding-bottom: 4px; }
+                      p { margin: 5pt 0; }
+                      table { border-collapse: collapse; width: 100%; margin-bottom: 20px; border: 2pt solid black; table-layout: fixed; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+                      th, td { border: 1pt solid black; padding: 6px; vertical-align: top; overflow: hidden; word-wrap: break-word; }
+                      th { background-color: #f0f0f0; font-weight: bold; text-align: center; font-size: 10pt; }
+                      td { font-size: 9pt; }
+                      .text-center { text-align: center; }
+                      img { max-width: 250px; height: auto; display: block; margin: 5px auto; }
+                      .bg-gray-100 { background-color: #f3f4f6; }
+                      .bg-gray-50 { background-color: #f9fafb; }
+                      .font-bold { font-weight: bold; }
+                    </style>
                     </head><body>`;
     const footer = "</body></html>";
     const sourceHTML = header + content + footer;
 
+    // Use UTF-8 with BOM for correct encoding in WPS/Word
     const blob = new Blob(["\ufeff", sourceHTML], {
-      type: "application/msword text/html",
+      type: "application/vnd.ms-word;charset=utf-8",
     });
     saveAs(blob, `${projectName || "script_export"}_${activeTab}.doc`);
+    setZoomScale(originalScale);
   };
 
   const getAllVisualImages = () => {
@@ -2656,7 +2700,7 @@ export default function App() {
                                     />
                                   </td>
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <textarea
@@ -2670,9 +2714,21 @@ export default function App() {
                                         )
                                       }
                                     />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'description')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <textarea
@@ -2686,9 +2742,21 @@ export default function App() {
                                         )
                                       }
                                     />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'clothing')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <textarea
@@ -2701,6 +2769,18 @@ export default function App() {
                                           e.target.value,
                                         )
                                       }
+                                    />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'makeup')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
+                                      }}
                                     />
                                   </td>
                                   {characterCols.map((col) => (
@@ -2720,10 +2800,22 @@ export default function App() {
                                           )
                                         }
                                       />
+                                      {/* Resizers */}
+                                      <div 
+                                        className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                        onMouseDown={(e) => handleColResizeStart(e, 'character', col)}
+                                      />
+                                      <div 
+                                        className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                        onMouseDown={(e) => {
+                                          const rowEl = e.currentTarget.closest('tr');
+                                          if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
+                                        }}
+                                      />
                                     </td>
                                   ))}
                                   <td
-                                    className="border-r border-black no-print align-middle text-center"
+                                    className="border-r border-black no-print align-middle text-center relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <div className="flex flex-col gap-1">
@@ -2760,8 +2852,20 @@ export default function App() {
                                         生图
                                       </button>
                                     </div>
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'actions')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
-                                  <td className="p-1 bg-gray-50 flex items-center justify-center min-h-[100px]">
+                                  <td className="p-1 bg-gray-50 flex items-center justify-center relative min-h-[100px]">
                                     {metaImages[`character-${i}`] ? (
                                       <div
                                         className="relative group cursor-zoom-in"
@@ -2782,6 +2886,18 @@ export default function App() {
                                         待生成
                                       </div>
                                     )}
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'preview')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                 </tr>
                               ))}
@@ -2930,7 +3046,7 @@ export default function App() {
                                     />
                                   </td>
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <textarea
@@ -2944,14 +3060,26 @@ export default function App() {
                                         )
                                       }
                                     />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'setting')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
-                                      value={scene.lighting}
+                                      value={scene.lighting || ""}
                                       onChange={(e) =>
                                         updateScene(
                                           i,
@@ -2960,14 +3088,26 @@ export default function App() {
                                         )
                                       }
                                     />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'lighting')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
-                                      value={scene.atmosphere}
+                                      value={scene.atmosphere || ""}
                                       onChange={(e) =>
                                         updateScene(
                                           i,
@@ -2976,11 +3116,23 @@ export default function App() {
                                         )
                                       }
                                     />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'atmosphere')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                   {sceneCols.map((col) => (
                                     <td
                                       key={col}
-                                      className="border-r border-black p-0"
+                                      className="border-r border-black p-0 relative"
                                       style={{ padding: `${tablePadding}px` }}
                                     >
                                       <textarea
@@ -2994,10 +3146,22 @@ export default function App() {
                                           )
                                         }
                                       />
+                                      {/* Resizers */}
+                                      <div 
+                                        className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                        onMouseDown={(e) => handleColResizeStart(e, 'scene', col)}
+                                      />
+                                      <div 
+                                        className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                        onMouseDown={(e) => {
+                                          const rowEl = e.currentTarget.closest('tr');
+                                          if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
+                                        }}
+                                      />
                                     </td>
                                   ))}
                                   <td
-                                    className="border-r border-black no-print align-middle text-center"
+                                    className="border-r border-black no-print align-middle text-center relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <div className="flex flex-col gap-1">
@@ -3025,13 +3189,25 @@ export default function App() {
                                         生图
                                       </button>
                                     </div>
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'actions')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
-                                  <td className="p-1 bg-gray-50 flex items-center justify-center">
+                                  <td className="p-1 bg-gray-50 flex items-center justify-center relative min-h-[100px]">
                                     {metaImages[`scene-${i}`] ? (
                                       <div
                                         className="relative group cursor-zoom-in"
                                         onClick={() =>
-                                          setPreviewFrameIndex(21000 + i)
+                                          setPreviewFrameIndex(11000 + i)
                                         }
                                       >
                                         <img
@@ -3047,6 +3223,18 @@ export default function App() {
                                         待生成
                                       </div>
                                     )}
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'preview')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                 </tr>
                               ))}
@@ -3054,6 +3242,7 @@ export default function App() {
                           </table>
                         </div>
                       </section>
+
 
                       {/* Props Table */}
                       <section>
@@ -3185,7 +3374,7 @@ export default function App() {
                                     />
                                   </td>
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <textarea
@@ -3199,9 +3388,21 @@ export default function App() {
                                         )
                                       }
                                     />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'prop', 'description')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <textarea
@@ -3211,11 +3412,23 @@ export default function App() {
                                         updateProp(i, "usage", e.target.value)
                                       }
                                     />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'prop', 'usage')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                   {propCols.map((col) => (
                                     <td
                                       key={col}
-                                      className="border-r border-black p-0"
+                                      className="border-r border-black p-0 relative"
                                       style={{ padding: `${tablePadding}px` }}
                                     >
                                       <textarea
@@ -3229,10 +3442,22 @@ export default function App() {
                                           )
                                         }
                                       />
+                                      {/* Resizers */}
+                                      <div 
+                                        className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                        onMouseDown={(e) => handleColResizeStart(e, 'prop', col)}
+                                      />
+                                      <div 
+                                        className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                        onMouseDown={(e) => {
+                                          const rowEl = e.currentTarget.closest('tr');
+                                          if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
+                                        }}
+                                      />
                                     </td>
                                   ))}
                                   <td
-                                    className="border-r border-black no-print align-middle text-center"
+                                    className="border-r border-black no-print align-middle text-center relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <div className="flex flex-col gap-1">
@@ -3260,13 +3485,25 @@ export default function App() {
                                         生图
                                       </button>
                                     </div>
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'prop', 'actions')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
-                                  <td className="p-1 bg-gray-50 flex items-center justify-center">
+                                  <td className="p-1 bg-gray-50 flex items-center justify-center relative min-h-[100px]">
                                     {metaImages[`prop-${i}`] ? (
                                       <div
                                         className="relative group cursor-zoom-in"
                                         onClick={() =>
-                                          setPreviewFrameIndex(22000 + i)
+                                          setPreviewFrameIndex(12000 + i)
                                         }
                                       >
                                         <img
@@ -3282,6 +3519,18 @@ export default function App() {
                                         待生成
                                       </div>
                                     )}
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'prop', 'preview')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                 </tr>
                               ))}
@@ -3555,7 +3804,7 @@ export default function App() {
                                   />
                                 </td>
                                 <td
-                                  className="border-r-2 border-black"
+                                  className="border-r-2 border-black relative"
                                   style={{ padding: `${tablePadding}px` }}
                                 >
                                   <div className="space-y-1">
@@ -3582,9 +3831,21 @@ export default function App() {
                                       }
                                     />
                                   </div>
+                                  {/* Resizers */}
+                                  <div 
+                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'shot')}
+                                  />
+                                  <div 
+                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => {
+                                      const rowEl = e.currentTarget.closest('tr');
+                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                    }}
+                                  />
                                 </td>
                                 <td
-                                  className="border-r-2 border-black"
+                                  className="border-r-2 border-black relative"
                                   style={{ padding: `${tablePadding}px` }}
                                 >
                                   <textarea
@@ -3601,9 +3862,21 @@ export default function App() {
                                       )
                                     }
                                   />
+                                  {/* Resizers */}
+                                  <div 
+                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'narration')}
+                                  />
+                                  <div 
+                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => {
+                                      const rowEl = e.currentTarget.closest('tr');
+                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                    }}
+                                  />
                                 </td>
                                 <td
-                                  className="border-r-2 border-black"
+                                  className="border-r-2 border-black relative"
                                   style={{ padding: `${tablePadding}px` }}
                                 >
                                   <textarea
@@ -3618,9 +3891,21 @@ export default function App() {
                                       )
                                     }
                                   />
+                                  {/* Resizers */}
+                                  <div 
+                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'subtitles')}
+                                  />
+                                  <div 
+                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => {
+                                      const rowEl = e.currentTarget.closest('tr');
+                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                    }}
+                                  />
                                 </td>
                                 <td
-                                  className="border-r-2 border-black"
+                                  className="border-r-2 border-black relative"
                                   style={{ padding: `${tablePadding}px` }}
                                 >
                                   <textarea
@@ -3634,11 +3919,23 @@ export default function App() {
                                       )
                                     }
                                   />
+                                  {/* Resizers */}
+                                  <div 
+                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'visual')}
+                                  />
+                                  <div 
+                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => {
+                                      const rowEl = e.currentTarget.closest('tr');
+                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                    }}
+                                  />
                                 </td>
                                 {storyboardCols.map((col) => (
                                   <td
                                     key={col}
-                                    className="border-r-2 border-black"
+                                    className="border-r-2 border-black relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <textarea
@@ -3652,10 +3949,22 @@ export default function App() {
                                         )
                                       }
                                     />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'storyboard', col)}
+                                    />
+                                    <div 
+                                      className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                      }}
+                                    />
                                   </td>
                                 ))}
                                 <td
-                                  className="border-r-2 border-black no-print"
+                                  className="border-r-2 border-black no-print relative"
                                   style={{ padding: `${tablePadding}px` }}
                                 >
                                   <div className="flex flex-col gap-1.5 justify-center h-full">
@@ -3728,6 +4037,18 @@ export default function App() {
                                       生图
                                     </button>
                                   </div>
+                                  {/* Resizers */}
+                                  <div 
+                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'actions')}
+                                  />
+                                  <div 
+                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => {
+                                      const rowEl = e.currentTarget.closest('tr');
+                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                    }}
+                                  />
                                 </td>
                                 <td className="border-r-2 border-black bg-gray-50 flex items-center justify-center relative p-1 min-h-[120px]">
                                   {frameImages[frame.frameNumber] ? (
@@ -3748,9 +4069,21 @@ export default function App() {
                                       待渲染
                                     </div>
                                   )}
+                                  {/* Resizers */}
+                                  <div 
+                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'preview')}
+                                  />
+                                  <div 
+                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => {
+                                      const rowEl = e.currentTarget.closest('tr');
+                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                    }}
+                                  />
                                 </td>
                                 <td 
-                                  className="border-b border-black bg-gray-50 align-top"
+                                  className="border-b border-black bg-gray-50 align-top relative"
                                   style={{ padding: `${tablePadding}px` }}
                                 >
                                   <textarea
@@ -3764,6 +4097,18 @@ export default function App() {
                                         e.target.value,
                                       )
                                     }
+                                  />
+                                  {/* Resizers */}
+                                  <div 
+                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'videoPrompt')}
+                                  />
+                                  <div 
+                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                    onMouseDown={(e) => {
+                                      const rowEl = e.currentTarget.closest('tr');
+                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                    }}
                                   />
                                 </td>
                               </tr>
