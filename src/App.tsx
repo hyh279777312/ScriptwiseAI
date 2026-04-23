@@ -177,6 +177,26 @@ export default function App() {
   const [previewFrameIndex, setPreviewFrameIndex] = useState<number | null>(
     null,
   );
+  const [localWorkflows, setLocalWorkflows] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch("/api/workflows")
+      .then((res) => res.json())
+      .then((data) => setLocalWorkflows(data))
+      .catch((err) => console.error("Failed to load workflows:", err));
+  }, []);
+
+  const handleSelectLocalWorkflow = (filename: string) => {
+    const workflow = localWorkflows.find((w) => w.filename === filename);
+    if (workflow) {
+      setComfyWorkflow(JSON.stringify(workflow.content, null, 2));
+      // Extract node ID from filename: T2I-Z-image-ID[5].json -> 5
+      const match = filename.match(/\[(\d+)\]/);
+      if (match && match[1]) {
+        setComfyNodeId(match[1]);
+      }
+    }
+  };
   const [gridPage, setGridPage] = useState(0);
   const [isGridExporting, setIsGridExporting] = useState(false);
   const [gridImageUrls, setGridImageUrls] = useState<Record<number, string[]>>(
@@ -1300,6 +1320,12 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Extract node ID from filename: T2I-Z-image-ID[5].json -> 5
+    const match = file.name.match(/\[(\d+)\]/);
+    if (match && match[1]) {
+      setComfyNodeId(match[1]);
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
@@ -2097,15 +2123,30 @@ export default function App() {
                           <label className="text-[10px] uppercase font-bold text-white opacity-60">
                             完整 Workflow (API JSON)
                           </label>
-                          <label className="text-[10px] bg-[#111] hover:bg-[var(--accent)] hover:text-black transition-colors border border-[var(--border)] rounded px-2 py-1 cursor-pointer text-[var(--accent)] font-bold">
-                            加载文件...
-                            <input
-                              type="file"
-                              accept=".json"
-                              className="hidden"
-                              onChange={handleWorkflowUpload}
-                            />
-                          </label>
+                          <div className="flex items-center gap-2">
+                            {localWorkflows.length > 0 && (
+                              <select
+                                onChange={(e) => handleSelectLocalWorkflow(e.target.value)}
+                                className="text-[10px] bg-[#111] border border-[var(--border)] rounded px-2 py-1 text-[var(--accent)] outline-none hover:border-[var(--accent)] transition-colors max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap"
+                              >
+                                <option value="">内置预设工作流...</option>
+                                {localWorkflows.map((w) => (
+                                  <option key={w.filename} value={w.filename}>
+                                    {w.filename}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                            <label className="text-[10px] bg-[#111] hover:bg-[var(--accent)] hover:text-black transition-colors border border-[var(--border)] rounded px-2 py-1 cursor-pointer text-[var(--accent)] font-bold">
+                              加载文件...
+                              <input
+                                type="file"
+                                accept=".json"
+                                className="hidden"
+                                onChange={handleWorkflowUpload}
+                              />
+                            </label>
+                          </div>
                         </div>
                         <div className="mt-1 relative group">
                           <div className="absolute inset-0 bg-gradient-to-t from-[#111] via-transparent to-transparent pointer-events-none rounded"></div>
