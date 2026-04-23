@@ -193,21 +193,62 @@ export default function App() {
     videoPrompt: 200,
   });
   const [storyboardRowHeights, setStoryboardRowHeights] = useState<Record<number, number>>({});
-  const [resizingCol, setResizingCol] = useState<{ key: string; startX: number; startWidth: number } | null>(null);
-  const [resizingRow, setResizingRow] = useState<{ index: number; startY: number; startHeight: number } | null>(null);
+  
+  // Character Table Resizing
+  const [characterColWidths, setCharacterColWidths] = useState<Record<string, number>>({
+    name: 120,
+    description: 300,
+    clothing: 150,
+    makeup: 150,
+    actions: 80,
+    preview: 150,
+  });
+  const [characterRowHeights, setCharacterRowHeights] = useState<Record<number, number>>({});
 
-  const handleColResizeStart = (e: React.MouseEvent, key: string) => {
+  // Scene Table Resizing
+  const [sceneColWidths, setSceneColWidths] = useState<Record<string, number>>({
+    name: 120,
+    setting: 300,
+    lighting: 150,
+    atmosphere: 150,
+    actions: 80,
+    preview: 150,
+  });
+  const [sceneRowHeights, setSceneRowHeights] = useState<Record<number, number>>({});
+
+  // Prop Table Resizing
+  const [propColWidths, setPropColWidths] = useState<Record<string, number>>({
+    name: 120,
+    description: 300,
+    usage: 180,
+    actions: 80,
+    preview: 150,
+  });
+  const [propRowHeights, setPropRowHeights] = useState<Record<number, number>>({});
+
+  const [resizingCol, setResizingCol] = useState<{ table: string; key: string; startX: number; startWidth: number } | null>(null);
+  const [resizingRow, setResizingRow] = useState<{ table: string; index: number; startY: number; startHeight: number } | null>(null);
+
+  const handleColResizeStart = (e: React.MouseEvent, table: string, key: string) => {
     e.preventDefault();
+    let currentWidth = 100;
+    if (table === 'storyboard') currentWidth = storyboardColWidths[key] || 100;
+    if (table === 'character') currentWidth = characterColWidths[key] || 100;
+    if (table === 'scene') currentWidth = sceneColWidths[key] || 100;
+    if (table === 'prop') currentWidth = propColWidths[key] || 100;
+
     setResizingCol({
+      table,
       key,
       startX: e.clientX,
-      startWidth: storyboardColWidths[key] || 100,
+      startWidth: currentWidth,
     });
   };
 
-  const handleRowResizeStart = (e: React.MouseEvent, index: number, currentHeight: number) => {
+  const handleRowResizeStart = (e: React.MouseEvent, table: string, index: number, currentHeight: number) => {
     e.preventDefault();
     setResizingRow({
+      table,
       index,
       startY: e.clientY,
       startHeight: currentHeight,
@@ -218,17 +259,29 @@ export default function App() {
     const handleMouseMove = (e: MouseEvent) => {
       if (resizingCol) {
         const deltaX = e.clientX - resizingCol.startX;
-        setStoryboardColWidths(prev => ({
-          ...prev,
-          [resizingCol.key]: Math.max(40, resizingCol.startWidth + deltaX),
-        }));
+        const newWidth = Math.max(40, resizingCol.startWidth + deltaX);
+        if (resizingCol.table === 'storyboard') {
+          setStoryboardColWidths(prev => ({ ...prev, [resizingCol.key]: newWidth }));
+        } else if (resizingCol.table === 'character') {
+          setCharacterColWidths(prev => ({ ...prev, [resizingCol.key]: newWidth }));
+        } else if (resizingCol.table === 'scene') {
+          setSceneColWidths(prev => ({ ...prev, [resizingCol.key]: newWidth }));
+        } else if (resizingCol.table === 'prop') {
+          setPropColWidths(prev => ({ ...prev, [resizingCol.key]: newWidth }));
+        }
       }
       if (resizingRow) {
         const deltaY = e.clientY - resizingRow.startY;
-        setStoryboardRowHeights(prev => ({
-          ...prev,
-          [resizingRow.index]: Math.max(60, resizingRow.startHeight + deltaY),
-        }));
+        const newHeight = Math.max(40, resizingRow.startHeight + deltaY);
+        if (resizingRow.table === 'storyboard') {
+          setStoryboardRowHeights(prev => ({ ...prev, [resizingRow.index]: newHeight }));
+        } else if (resizingRow.table === 'character') {
+          setCharacterRowHeights(prev => ({ ...prev, [resizingRow.index]: newHeight }));
+        } else if (resizingRow.table === 'scene') {
+          setSceneRowHeights(prev => ({ ...prev, [resizingRow.index]: newHeight }));
+        } else if (resizingRow.table === 'prop') {
+          setPropRowHeights(prev => ({ ...prev, [resizingRow.index]: newHeight }));
+        }
       }
     };
 
@@ -2480,7 +2533,7 @@ export default function App() {
                         </div>
                         <div className="overflow-x-auto border border-black">
                           <table
-                            className="w-full border-collapse"
+                            className="w-full border-collapse table-fixed"
                             style={{
                               fontSize: `${tableFontSize}px`,
                               lineHeight: tableLineHeight,
@@ -2488,21 +2541,50 @@ export default function App() {
                           >
                             <thead>
                               <tr className="bg-gray-50 border-b border-black">
-                                <th className="border-r border-black p-2 w-24">
+                                <th 
+                                  style={{ width: `${characterColWidths.name}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   角色姓名
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'character', 'name')}
+                                  />
                                 </th>
-                                <th className="border-r border-black p-2">
+                                <th 
+                                  style={{ width: `${characterColWidths.description}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   核心特征 / 性格描述
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'character', 'description')}
+                                  />
                                 </th>
-                                <th className="border-r border-black p-2 w-32">
+                                <th 
+                                  style={{ width: `${characterColWidths.clothing}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   服装设定
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'character', 'clothing')}
+                                  />
                                 </th>
-                                <th className="border-r border-black p-2 w-32">
+                                <th 
+                                  style={{ width: `${characterColWidths.makeup}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   妆造设定
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'character', 'makeup')}
+                                  />
                                 </th>
                                 {characterCols.map((col) => (
                                   <th
                                     key={col}
+                                    style={{ width: `${characterColWidths[col] || 150}px` }}
                                     className="border-r border-black p-2 relative group"
                                   >
                                     {col}
@@ -2514,13 +2596,31 @@ export default function App() {
                                     >
                                       ×
                                     </button>
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'character', col)}
+                                    />
                                   </th>
                                 ))}
-                                <th className="border-r border-black p-2 w-20 no-print">
+                                <th 
+                                  style={{ width: `${characterColWidths.actions}px` }}
+                                  className="border-r border-black p-2 no-print relative"
+                                >
                                   操作
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'character', 'actions')}
+                                  />
                                 </th>
-                                <th className="p-2 w-32 bg-gray-50 font-bold text-center">
+                                <th 
+                                  style={{ width: `${characterColWidths.preview}px` }}
+                                  className="p-2 bg-gray-50 font-bold text-center relative"
+                                >
                                   视觉效果预览
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'character', 'preview')}
+                                  />
                                 </th>
                               </tr>
                             </thead>
@@ -2528,10 +2628,11 @@ export default function App() {
                               {results.characters.map((char: any, i) => (
                                 <tr
                                   key={i}
-                                  className="border-b border-gray-300"
+                                  className="border-b border-gray-300 relative"
+                                  style={{ height: characterRowHeights[i] ? `${characterRowHeights[i]}px` : 'auto' }}
                                 >
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <input
@@ -2544,6 +2645,14 @@ export default function App() {
                                           e.target.value,
                                         )
                                       }
+                                    />
+                                    {/* Horizontal resize handle */}
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
+                                      }}
                                     />
                                   </td>
                                   <td
@@ -2704,7 +2813,7 @@ export default function App() {
                         </div>
                         <div className="overflow-x-auto border border-black">
                           <table
-                            className="w-full border-collapse"
+                            className="w-full border-collapse table-fixed"
                             style={{
                               fontSize: `${tableFontSize}px`,
                               lineHeight: tableLineHeight,
@@ -2712,21 +2821,50 @@ export default function App() {
                           >
                             <thead>
                               <tr className="bg-gray-50 border-b border-black">
-                                <th className="border-r border-black p-2 w-24">
+                                <th 
+                                  style={{ width: `${sceneColWidths.name}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   场景名称
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'scene', 'name')}
+                                  />
                                 </th>
-                                <th className="border-r border-black p-2">
+                                <th 
+                                  style={{ width: `${sceneColWidths.setting}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   环境特征与描述
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'scene', 'setting')}
+                                  />
                                 </th>
-                                <th className="border-r border-black p-2 w-32">
+                                <th 
+                                  style={{ width: `${sceneColWidths.lighting}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   光影气氛
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'scene', 'lighting')}
+                                  />
                                 </th>
-                                <th className="border-r border-black p-2 w-32">
+                                <th 
+                                  style={{ width: `${sceneColWidths.atmosphere}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   空间构图感
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'scene', 'atmosphere')}
+                                  />
                                 </th>
                                 {sceneCols.map((col) => (
                                   <th
                                     key={col}
+                                    style={{ width: `${sceneColWidths[col] || 150}px` }}
                                     className="border-r border-black p-2 relative group"
                                   >
                                     {col}
@@ -2736,13 +2874,31 @@ export default function App() {
                                     >
                                       ×
                                     </button>
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', col)}
+                                    />
                                   </th>
                                 ))}
-                                <th className="border-r border-black p-2 w-20 no-print">
+                                <th 
+                                  style={{ width: `${sceneColWidths.actions}px` }}
+                                  className="border-r border-black p-2 w-20 no-print relative"
+                                >
                                   操作
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'scene', 'actions')}
+                                  />
                                 </th>
-                                <th className="p-2 w-32 bg-gray-50 font-bold text-center">
+                                <th 
+                                  style={{ width: `${sceneColWidths.preview}px` }}
+                                  className="p-2 w-32 bg-gray-50 font-bold text-center relative"
+                                >
                                   视觉效果预览
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'scene', 'preview')}
+                                  />
                                 </th>
                               </tr>
                             </thead>
@@ -2750,10 +2906,11 @@ export default function App() {
                               {results.scenes.map((scene: any, i) => (
                                 <tr
                                   key={i}
-                                  className="border-b border-gray-300"
+                                  className="border-b border-gray-300 relative"
+                                  style={{ height: sceneRowHeights[i] ? `${sceneRowHeights[i]}px` : 'auto' }}
                                 >
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <input
@@ -2762,6 +2919,14 @@ export default function App() {
                                       onChange={(e) =>
                                         updateScene(i, "name", e.target.value)
                                       }
+                                    />
+                                    {/* Horizontal resize handle */}
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
+                                      }}
                                     />
                                   </td>
                                   <td
@@ -2913,7 +3078,7 @@ export default function App() {
                         </div>
                         <div className="overflow-x-auto border border-black">
                           <table
-                            className="w-full border-collapse"
+                            className="w-full border-collapse table-fixed"
                             style={{
                               fontSize: `${tableFontSize}px`,
                               lineHeight: tableLineHeight,
@@ -2921,18 +3086,40 @@ export default function App() {
                           >
                             <thead>
                               <tr className="bg-gray-50 border-b border-black">
-                                <th className="border-r border-black p-2 w-24">
+                                <th 
+                                  style={{ width: `${propColWidths.name}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   道具名称
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'prop', 'name')}
+                                  />
                                 </th>
-                                <th className="border-r border-black p-2">
+                                <th 
+                                  style={{ width: `${propColWidths.description}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   道具特征 / 设计细节
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'prop', 'description')}
+                                  />
                                 </th>
-                                <th className="border-r border-black p-2 w-48">
+                                <th 
+                                  style={{ width: `${propColWidths.usage}px` }}
+                                  className="border-r border-black p-2 relative"
+                                >
                                   剧中用途 / 使用逻辑
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'prop', 'usage')}
+                                  />
                                 </th>
                                 {propCols.map((col) => (
                                   <th
                                     key={col}
+                                    style={{ width: `${propColWidths[col] || 150}px` }}
                                     className="border-r border-black p-2 relative group"
                                   >
                                     {col}
@@ -2942,13 +3129,31 @@ export default function App() {
                                     >
                                       ×
                                     </button>
+                                    <div 
+                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'prop', col)}
+                                    />
                                   </th>
                                 ))}
-                                <th className="border-r border-black p-2 w-20 no-print">
+                                <th 
+                                  style={{ width: `${propColWidths.actions}px` }}
+                                  className="border-r border-black p-2 w-20 no-print relative"
+                                >
                                   操作
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'prop', 'actions')}
+                                  />
                                 </th>
-                                <th className="p-2 w-32 bg-gray-50 font-bold text-center">
+                                <th 
+                                  style={{ width: `${propColWidths.preview}px` }}
+                                  className="p-2 w-32 bg-gray-50 font-bold text-center relative"
+                                >
                                   视觉效果预览
+                                  <div 
+                                    className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, 'prop', 'preview')}
+                                  />
                                 </th>
                               </tr>
                             </thead>
@@ -2956,10 +3161,11 @@ export default function App() {
                               {results.props.map((prop: any, i) => (
                                 <tr
                                   key={i}
-                                  className="border-b border-gray-300"
+                                  className="border-b border-gray-300 relative"
+                                  style={{ height: propRowHeights[i] ? `${propRowHeights[i]}px` : 'auto' }}
                                 >
                                   <td
-                                    className="border-r border-black p-0"
+                                    className="border-r border-black p-0 relative"
                                     style={{ padding: `${tablePadding}px` }}
                                   >
                                     <input
@@ -2968,6 +3174,14 @@ export default function App() {
                                       onChange={(e) =>
                                         updateProp(i, "name", e.target.value)
                                       }
+                                    />
+                                    {/* Horizontal resize handle */}
+                                    <div 
+                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
+                                      }}
                                     />
                                   </td>
                                   <td
@@ -3223,7 +3437,7 @@ export default function App() {
                                 镜号
                                 <div 
                                   className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
-                                  onMouseDown={(e) => handleColResizeStart(e, 'index')}
+                                  onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'index')}
                                 />
                               </th>
                               <th 
@@ -3233,7 +3447,7 @@ export default function App() {
                                 景别 / 角度
                                 <div 
                                   className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
-                                  onMouseDown={(e) => handleColResizeStart(e, 'shot')}
+                                  onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'shot')}
                                 />
                               </th>
                               <th 
@@ -3243,7 +3457,7 @@ export default function App() {
                                 旁白 / 对白
                                 <div 
                                   className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
-                                  onMouseDown={(e) => handleColResizeStart(e, 'narration')}
+                                  onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'narration')}
                                 />
                               </th>
                               <th 
@@ -3253,7 +3467,7 @@ export default function App() {
                                 字幕 (SUPER)
                                 <div 
                                   className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
-                                  onMouseDown={(e) => handleColResizeStart(e, 'subtitles')}
+                                  onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'subtitles')}
                                 />
                               </th>
                               <th 
@@ -3263,7 +3477,7 @@ export default function App() {
                                 画面内容描述
                                 <div 
                                   className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
-                                  onMouseDown={(e) => handleColResizeStart(e, 'visual')}
+                                  onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'visual')}
                                 />
                               </th>
                               {storyboardCols.map((col) => (
@@ -3283,7 +3497,7 @@ export default function App() {
                                   </button>
                                   <div 
                                     className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
-                                    onMouseDown={(e) => handleColResizeStart(e, col)}
+                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', col)}
                                   />
                                 </th>
                               ))}
@@ -3294,7 +3508,7 @@ export default function App() {
                                 操作
                                 <div 
                                   className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
-                                  onMouseDown={(e) => handleColResizeStart(e, 'actions')}
+                                  onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'actions')}
                                 />
                               </th>
                               <th 
@@ -3304,7 +3518,7 @@ export default function App() {
                                 分镜视觉效果预览
                                 <div 
                                   className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
-                                  onMouseDown={(e) => handleColResizeStart(e, 'preview')}
+                                  onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'preview')}
                                 />
                               </th>
                               <th 
@@ -3314,7 +3528,7 @@ export default function App() {
                                 图生视频提示词
                                 <div 
                                   className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
-                                  onMouseDown={(e) => handleColResizeStart(e, 'videoPrompt')}
+                                  onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'videoPrompt')}
                                 />
                               </th>
                             </tr>
@@ -3336,7 +3550,7 @@ export default function App() {
                                     className="absolute bottom-[-2px] left-0 w-full h-[5px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none"
                                     onMouseDown={(e) => {
                                       const rowEl = e.currentTarget.closest('tr');
-                                      if (rowEl) handleRowResizeStart(e, i, rowEl.offsetHeight);
+                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
                                     }}
                                   />
                                 </td>
