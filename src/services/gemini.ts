@@ -35,8 +35,9 @@ export interface StoryboardFrame {
   composition: string;
   shotType?: string;      // 景别
   angle?: string;         // 角度
-  narration?: string;    // 旁白
-  dialogue?: string;     // 对白
+  narration?: string;    // 旁白/对白
+  subtitles?: string;    // 字幕 (Super)
+  videoPrompt?: string;  // 图生视频提示词
   cameraMovement?: string; // 镜头动作
 }
 
@@ -62,14 +63,14 @@ export async function optimizeEntityPrompt(
   let jsonStructure = "";
 
   if (type === 'character') {
-    entityTask = `针对角色进行扩写优化：性格描述、服装设定、妆造设定。`;
-    jsonStructure = `{ "description": "...", "clothing": "...", "makeup": "..." }`;
+    entityTask = `针对角色进行一键整行扩写优化：性格描述、服装设定、妆造设定。请务必根据该角色的姓名和现有描述，对其所有相关设定进行整体的细节扩充和润色。`;
+    jsonStructure = `{ "description": "扩写后的性格描述...", "clothing": "扩写后的服装细节...", "makeup": "扩写后的妆造设定..." }`;
   } else if (type === 'scene') {
-    entityTask = `针对场景进行扩写优化：环境特征、光影氛围、空间构图感。`;
-    jsonStructure = `{ "setting": "...", "lighting": "...", "atmosphere": "..." }`;
+    entityTask = `针对场景进行一键整行扩写优化：环境特征、光影氛围、空间构图感。请务必根据该场景的名称和现有设定，对其进行整体的空间感和氛围感扩充。`;
+    jsonStructure = `{ "setting": "扩写后的环境特征...", "lighting": "更专业的灯光设定...", "atmosphere": "更具色彩科学的空间氛围..." }`;
   } else if (type === 'prop') {
-    entityTask = `针对道具进行扩写优化：道具特征/设计细节、使用逻辑。`;
-    jsonStructure = `{ "description": "...", "usage": "..." }`;
+    entityTask = `针对道具进行一键整行扩写优化：道具特征/设计细节、使用逻辑。请针对该道具的外观、材质、及在剧本中的使用细节进行扩写。`;
+    jsonStructure = `{ "description": "扩写后的细节设计描述...", "usage": "扩写后的交互与逻辑描述..." }`;
   }
 
   const prompt = `
@@ -240,7 +241,9 @@ export async function analyzeScript(script: string, referenceImages?: string[], 
       5. 视觉一致性：分析结果中角色、场景、道具等全局性提示词必须智能划分并写入到相应分镜的视觉描述 (visualDescription) 中，以确保一致性。
       6. 【重要格式】：每一帧的分镜视觉描述（visualDescription）开头必须智能添加【景别、镜头、画面风格】，并用逗号隔开。此要求严禁省略。
       7. 【新增字段】：为每个分镜提取出纯粹的景别 (shotType, 如特写/全景) 和镜头运动 (cameraMovement, 如摇镜头/固定)。
-      8. 动态数量：根据画面视觉复杂度决定分镜数量。      
+      8. 【声音与字幕】：将剧本中的 VO、旁白、对白内容准确识别并填入 narration 字段。将剧本中出现的 Super、花字、字幕内容准确识别并填入 subtitles 字段。
+      9. 【视频提示词】：根据视觉描述，生成一段专业的“图生视频提示词”(videoPrompt)，描述画面中的动态趋势、镜头轨迹或微表情变化。
+      10. 动态数量：根据画面视觉复杂度决定分镜数量。      
       剧本内容：${script}
     `.trim() }
   ];
@@ -314,8 +317,11 @@ export async function analyzeScript(script: string, referenceImages?: string[], 
                   composition: { type: Type.STRING },
                   shotType: { type: Type.STRING },
                   cameraMovement: { type: Type.STRING },
+                  narration: { type: Type.STRING },
+                  subtitles: { type: Type.STRING },
+                  videoPrompt: { type: Type.STRING },
                 },
-                required: ["frameNumber", "visualDescription", "audioVoiceover", "composition", "shotType", "cameraMovement"],
+                required: ["frameNumber", "visualDescription", "audioVoiceover", "composition", "shotType", "cameraMovement", "narration", "subtitles", "videoPrompt"],
               },
             },
           },
@@ -363,12 +369,14 @@ export async function analyzeOllamaScript(
 3. 【强制拆分场景】：如果一段描述中出现了不同的场景或地点，必须将其拆分为对应的多个分镜帧。一个分镜提示词内【绝对不得】出现两个及以上场景的描述。
 4. 视觉一致性：分析结果中角色、场景、道具等全局性提示词必须智能划分并写入到相应分镜的视觉描述 (visualDescription) 中，以确保一致性。
 5. 【重要格式】：每一帧的分镜视觉描述（visualDescription）开头必须智能添加【景别、镜头、画面风格】，并用逗号隔开。此要求严禁省略。
-6. 【重要】你的输出必须且只能为纯粹的JSON（不要用Markdown格式），完全匹配以下结构：
+6. 【声音与字幕】：将剧本中的 VO、旁白、对白内容准确识别并填入 narration 字段。将剧本中出现的 Super、花字、字幕内容准确识别并填入 subtitles 字段。
+7. 【视频提示词】：根据视觉描述，生成一段专业的“图生视频提示词”(videoPrompt)，描述画面中的动态趋势、镜头轨迹或微表情变化。
+8. 【重要】你的输出必须且只能为纯粹的JSON（不要用Markdown格式），完全匹配以下结构：
 {
   "characters": [{ "name": "...", "description": "...", "clothing": "...", "makeup": "..." }],
   "props": [{ "name": "...", "description": "...", "usage": "..." }],
   "scenes": [{ "name": "...", "setting": "...", "lighting": "...", "atmosphere": "...", "shotType": "...", "cameraMovement": "..." }],
-  "storyboard": [{ "frameNumber": 1, "visualDescription": "...", "audioVoiceover": "...", "composition": "...", "shotType": "...", "cameraMovement": "..." }]
+  "storyboard": [{ "frameNumber": 1, "visualDescription": "...", "audioVoiceover": "...", "composition": "...", "shotType": "...", "cameraMovement": "...", "narration": "...", "subtitles": "...", "videoPrompt": "..." }]
 }
 
 剧本内容：
@@ -634,6 +642,8 @@ export async function analyzeScriptWithOtherLLM(
     1. 所有的输出内容必须使用【中文】。
     2. 【重要格式】：输出必须为纯粹的 JSON 格式，包含 characters, scenes, props, storyboard 四个数组。
     3. storyboard 中每一帧视觉描述（visualDescription）开头必须包含景别、镜头、画面风格。
+    4. 【声音与字幕】：将剧本中的 VO、旁白、对白内容准确识别并填入 narration 字段。将剧本中出现的 Super、花字、字幕内容准确识别并填入 subtitles 字段。
+    5. 【视频提示词】：根据视觉描述，为每一帧生成一段专业的“图生视频提示词”(videoPrompt)，描述画面中的动态趋势（如：镜头缓慢推近、烟雾缭绕、人物眨眼等）。
     
     剧本内容：${script}
     
@@ -642,7 +652,19 @@ export async function analyzeScriptWithOtherLLM(
       "characters": [],
       "scenes": [],
       "props": [],
-      "storyboard": []
+      "storyboard": [
+        {
+          "frameNumber": 1,
+          "visualDescription": "...",
+          "audioVoiceover": "...",
+          "composition": "...",
+          "shotType": "...",
+          "cameraMovement": "...",
+          "narration": "...",
+          "subtitles": "...",
+          "videoPrompt": "..."
+        }
+      ]
     }
   `.trim();
 

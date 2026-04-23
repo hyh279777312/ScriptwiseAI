@@ -481,16 +481,40 @@ export default function App() {
       );
 
       if (type === "character") {
-        updateCharacter(index, "description", optimized.description);
-        updateCharacter(index, "clothing", optimized.clothing);
-        updateCharacter(index, "makeup", optimized.makeup);
+        setResults((prev) => {
+          if (!prev) return prev;
+          const newChars = [...prev.characters];
+          newChars[index] = {
+            ...newChars[index],
+            description: optimized.description,
+            clothing: optimized.clothing,
+            makeup: optimized.makeup,
+          };
+          return { ...prev, characters: newChars };
+        });
       } else if (type === "scene") {
-        updateScene(index, "setting", optimized.setting);
-        updateScene(index, "lighting", optimized.lighting);
-        updateScene(index, "atmosphere", optimized.atmosphere);
+        setResults((prev) => {
+          if (!prev) return prev;
+          const newScenes = [...prev.scenes];
+          newScenes[index] = {
+            ...newScenes[index],
+            setting: optimized.setting,
+            lighting: optimized.lighting,
+            atmosphere: optimized.atmosphere,
+          };
+          return { ...prev, scenes: newScenes };
+        });
       } else if (type === "prop") {
-        updateProp(index, "description", optimized.description);
-        updateProp(index, "usage", optimized.usage);
+        setResults((prev) => {
+          if (!prev) return prev;
+          const newProps = [...prev.props];
+          newProps[index] = {
+            ...newProps[index],
+            description: optimized.description,
+            usage: optimized.usage,
+          };
+          return { ...prev, props: newProps };
+        });
       }
     } catch (err: any) {
       console.error(err);
@@ -621,6 +645,7 @@ export default function App() {
     const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
                     <head><meta charset='utf-8'><title>Export</title>
                     <style>
+                      @page { size: landscape; margin: 1in; }
                       body { font-family: 'SimSun', 'Arial', sans-serif; }
                       table { border-collapse: collapse; width: 100%; margin-bottom: 20px; border: 2px solid black; }
                       th, td { border: 1px solid black; padding: 8px; vertical-align: top; }
@@ -629,6 +654,15 @@ export default function App() {
                       .text-center { text-align: center; }
                       img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
                     </style>
+                    <!--[if gte mso 9]>
+                    <xml>
+                    <w:WordDocument>
+                    <w:View>Print</w:View>
+                    <w:Zoom>100</w:Zoom>
+                    <w:DoNotOptimizeForBrowser/>
+                    </w:WordDocument>
+                    </xml>
+                    <![endif]-->
                     </head><body>`;
     const footer = "</body></html>";
     const sourceHTML = header + content + footer;
@@ -3126,6 +3160,9 @@ export default function App() {
                               <th className="border-r-2 border-b-2 border-black p-2 w-48">
                                 旁白 / 对白
                               </th>
+                              <th className="border-r-2 border-b-2 border-black p-2 w-32">
+                                字幕 (SUPER)
+                              </th>
                               <th className="border-r-2 border-b-2 border-black p-2">
                                 画面内容描述
                               </th>
@@ -3150,6 +3187,9 @@ export default function App() {
                               </th>
                               <th className="border-b-2 border-black p-2 w-64 bg-gray-50 font-bold text-center">
                                 分镜视觉效果预览
+                              </th>
+                              <th className="border-l-2 border-b-2 border-black p-2 w-48 bg-gray-50 font-bold">
+                                图生视频提示词
                               </th>
                             </tr>
                           </thead>
@@ -3198,12 +3238,30 @@ export default function App() {
                                   <textarea
                                     className="w-full bg-transparent outline-none resize-none min-h-[60px]"
                                     value={
-                                      frame.narration || frame.dialogue || ""
+                                      frame.narration || ""
                                     }
+                                    placeholder="旁白 / 对白"
                                     onChange={(e) =>
                                       updateStoryboardFrame(
                                         i,
                                         "narration",
+                                        e.target.value,
+                                      )
+                                    }
+                                  />
+                                </td>
+                                <td
+                                  className="border-r-2 border-black"
+                                  style={{ padding: `${tablePadding}px` }}
+                                >
+                                  <textarea
+                                    className="w-full bg-transparent outline-none resize-none min-h-[60px]"
+                                    value={frame.subtitles || ""}
+                                    placeholder="字幕内容 (Super)"
+                                    onChange={(e) =>
+                                      updateStoryboardFrame(
+                                        i,
+                                        "subtitles",
                                         e.target.value,
                                       )
                                     }
@@ -3319,7 +3377,7 @@ export default function App() {
                                     </button>
                                   </div>
                                 </td>
-                                <td className="bg-gray-50 flex items-center justify-center relative p-1 min-h-[120px]">
+                                <td className="border-r-2 border-black bg-gray-50 flex items-center justify-center relative p-1 min-h-[120px]">
                                   {frameImages[frame.frameNumber] ? (
                                     <div
                                       className="relative group cursor-zoom-in"
@@ -3338,6 +3396,23 @@ export default function App() {
                                       待渲染
                                     </div>
                                   )}
+                                </td>
+                                <td 
+                                  className="border-b border-black bg-gray-50 align-top"
+                                  style={{ padding: `${tablePadding}px` }}
+                                >
+                                  <textarea
+                                    className="w-full bg-transparent outline-none resize-none min-h-[100px] text-[0.8em] text-gray-600 font-mono"
+                                    placeholder="视频生成提示词..."
+                                    value={frame.videoPrompt || ""}
+                                    onChange={(e) =>
+                                      updateStoryboardFrame(
+                                        i,
+                                        "videoPrompt",
+                                        e.target.value,
+                                      )
+                                    }
+                                  />
                                 </td>
                               </tr>
                             ))}
