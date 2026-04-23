@@ -48,48 +48,91 @@ export interface AnalysisResult {
 }
 
 /**
- * 使用 Ollama 智能扩写/优化实体提示词
+ * 优化实体（角色、场景、道具）提示词
  */
 export async function optimizeEntityPrompt(
-  baseUrl: string,
-  modelName: string,
   type: 'character' | 'scene' | 'prop',
-  entity: any,
-  context: string
-): Promise<string> {
+  data: any,
+  context: string,
+  engine: string = "gemini",
+  apiKey?: string,
+  ollamaConfig?: { url: string, model: string }
+): Promise<any> {
+  let entityTask = "";
+  let jsonStructure = "";
+
+  if (type === 'character') {
+    entityTask = `针对角色进行扩写优化：性格描述、服装设定、妆造设定。`;
+    jsonStructure = `{ "description": "...", "clothing": "...", "makeup": "..." }`;
+  } else if (type === 'scene') {
+    entityTask = `针对场景进行扩写优化：环境特征、光影氛围、空间构图感。`;
+    jsonStructure = `{ "setting": "...", "lighting": "...", "atmosphere": "..." }`;
+  } else if (type === 'prop') {
+    entityTask = `针对道具进行扩写优化：道具特征/设计细节、使用逻辑。`;
+    jsonStructure = `{ "description": "...", "usage": "..." }`;
+  }
+
   const prompt = `
-你是一位专业的电影视觉设计专家。
-请根据提供的【整体故事背景】和【基础描述】，为该【${type === 'character' ? '角色' : type === 'scene' ? '场景' : '道具'}】扩写一段极其详尽、具有高度一致性的视觉描述提示词。
-
-要求：
-1. 扩写内容应包含：具体的材质、质感、光影、颜色细节。
-2. 保持视觉一致性，确保描述与整体故事氛围相符。
-3. 请直接输出扩写后的【中文描述内容】，不要包含任何解释或开场白。
-
-【故事背景】：
-${context}
-
-【当前${type}基础信息】：
-${JSON.stringify(entity)}
-`.trim();
+    你是一位电影视觉大师和顶级提示词工程师。
+    请根据提供的【现有数据】和【剧本逻辑上下文】，${entityTask}
+    
+    优化要求：
+    1. 增强细节：加入具体的质感、材质、色彩氛围、以及符合电影感的细节描述。
+    2. 逻辑一致：确保优化后的内容与剧本上下文逻辑自洽。
+    3. 【重要要求】：你的输出必须且只能为纯粹的JSON（不要用Markdown格式），完全匹配以下结构：
+    ${jsonStructure}
+    
+    【现有数据】：${JSON.stringify(data)}
+    【剧本上下文】：${context}
+  `.trim();
 
   try {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: modelName,
-        prompt: prompt,
-        stream: false,
-      }),
-    });
+    let resultText = "";
+    if (engine === "gemini") {
+      const currentAi = apiKey ? new GoogleGenAI({ apiKey: apiKey }) : ai;
+      const model = "gemini-3.1-pro";
+      const response = await currentAi.models.generateContent({
+        model,
+        contents: { parts: [{ text: prompt }] },
+      });
+      resultText = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+    } else if (engine === "ollama") {
+      const baseUrl = ollamaConfig?.url || "http://127.0.0.1:11434";
+      const modelName = ollamaConfig?.model || "qwen3-coder:30b";
+      const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: modelName, prompt: prompt, stream: false }),
+      });
+      if (!response.ok) throw new Error(`Ollama 优化失败: ${response.statusText}`);
+      const result = await response.json();
+      resultText = result.response?.trim() || "";
+    } else {
+      const modelMap: Record<string, string> = { gpt: "gpt-4o", doubao: "doubao-pro-128k" };
+      const endpointMap: Record<string, string> = {
+        gpt: "https://api.openai.com/v1/chat/completions",
+        doubao: "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+      };
+      const endpoint = endpointMap[engine] || endpointMap["gpt"];
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: modelMap[engine] || engine,
+          messages: [{ role: "system", content: "你是一位电影视觉大师，擅长网页提示词优化。" }, { role: "user", content: prompt }]
+        })
+      });
+      if (!res.ok) throw new Error(`${engine} 优化请求失败: ${res.statusText}`);
+      const resData = await res.json();
+      resultText = resData.choices?.[0]?.message?.content?.trim() || "";
+    }
 
-    if (!response.ok) throw new Error(`Ollama 优化失败: ${response.statusText}`);
-    const result = await response.json();
-    return result.response?.trim() || "扩写失败";
-  } catch (err) {
-    console.error("Optimize failed", err);
-    return "扩写失败";
+    const match = resultText.match(/\{[\s\S]*\}/);
+    const jsonStr = match ? match[0] : resultText;
+    return JSON.parse(jsonStr);
+  } catch (err: any) {
+    console.error(`Entity optimization failed`, err);
+    throw err;
   }
 }
 
@@ -174,9 +217,9 @@ export async function optimizeStoryboardPrompt(
       const data = await res.json();
       return data.choices?.[0]?.message?.content?.trim() || visualDescription;
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error(`${engine} prompt optimization failed`, err);
-    return visualDescription; // Fallback to original
+    throw err; // Re-throw to allow UI to show error alert
   }
 }
 
