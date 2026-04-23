@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+# 忽略体积庞大的本地环境和安装包
+node_env/
+node-v24.15.0.pkg
