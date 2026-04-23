@@ -182,6 +182,71 @@ export default function App() {
     {},
   );
   const [isOptimizing, setIsOptimizing] = useState<string | null>(null);
+  const [storyboardColWidths, setStoryboardColWidths] = useState<Record<string, number>>({
+    index: 60,
+    shot: 100,
+    narration: 220,
+    subtitles: 180,
+    visual: 350,
+    actions: 80,
+    preview: 280,
+    videoPrompt: 200,
+  });
+  const [storyboardRowHeights, setStoryboardRowHeights] = useState<Record<number, number>>({});
+  const [resizingCol, setResizingCol] = useState<{ key: string; startX: number; startWidth: number } | null>(null);
+  const [resizingRow, setResizingRow] = useState<{ index: number; startY: number; startHeight: number } | null>(null);
+
+  const handleColResizeStart = (e: React.MouseEvent, key: string) => {
+    e.preventDefault();
+    setResizingCol({
+      key,
+      startX: e.clientX,
+      startWidth: storyboardColWidths[key] || 100,
+    });
+  };
+
+  const handleRowResizeStart = (e: React.MouseEvent, index: number, currentHeight: number) => {
+    e.preventDefault();
+    setResizingRow({
+      index,
+      startY: e.clientY,
+      startHeight: currentHeight,
+    });
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (resizingCol) {
+        const deltaX = e.clientX - resizingCol.startX;
+        setStoryboardColWidths(prev => ({
+          ...prev,
+          [resizingCol.key]: Math.max(40, resizingCol.startWidth + deltaX),
+        }));
+      }
+      if (resizingRow) {
+        const deltaY = e.clientY - resizingRow.startY;
+        setStoryboardRowHeights(prev => ({
+          ...prev,
+          [resizingRow.index]: Math.max(60, resizingRow.startHeight + deltaY),
+        }));
+      }
+    };
+
+    const handleMouseUp = () => {
+      setResizingCol(null);
+      setResizingRow(null);
+    };
+
+    if (resizingCol || resizingRow) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizingCol, resizingRow]);
+
   const gridCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isExtractingDoc, setIsExtractingDoc] = useState(false);
   const [rawAnalysisText, setRawAnalysisText] = useState("");
@@ -3143,7 +3208,7 @@ export default function App() {
                       <div id="storyboard-content">
                       <div className="overflow-x-auto">
                         <table
-                          className="w-full border-collapse border-t-2 border-l-2 border-black"
+                          className="w-full border-collapse border-t-2 border-l-2 border-black table-fixed"
                           style={{
                             fontSize: `${tableFontSize}px`,
                             lineHeight: tableLineHeight,
@@ -3151,24 +3216,60 @@ export default function App() {
                         >
                           <thead>
                             <tr className="bg-gray-100 border-b-2 border-black">
-                              <th className="border-r-2 border-b-2 border-black p-2 w-16 text-center">
+                              <th 
+                                style={{ width: `${storyboardColWidths.index}px` }}
+                                className="border-r-2 border-b-2 border-black p-2 text-center relative"
+                              >
                                 镜号
+                                <div 
+                                  className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                  onMouseDown={(e) => handleColResizeStart(e, 'index')}
+                                />
                               </th>
-                              <th className="border-r-2 border-b-2 border-black p-2 w-24">
+                              <th 
+                                style={{ width: `${storyboardColWidths.shot}px` }}
+                                className="border-r-2 border-b-2 border-black p-2 relative"
+                              >
                                 景别 / 角度
+                                <div 
+                                  className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                  onMouseDown={(e) => handleColResizeStart(e, 'shot')}
+                                />
                               </th>
-                              <th className="border-r-2 border-b-2 border-black p-2 w-48">
+                              <th 
+                                style={{ width: `${storyboardColWidths.narration}px` }}
+                                className="border-r-2 border-b-2 border-black p-2 relative"
+                              >
                                 旁白 / 对白
+                                <div 
+                                  className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                  onMouseDown={(e) => handleColResizeStart(e, 'narration')}
+                                />
                               </th>
-                              <th className="border-r-2 border-b-2 border-black p-2 w-32">
+                              <th 
+                                style={{ width: `${storyboardColWidths.subtitles}px` }}
+                                className="border-r-2 border-b-2 border-black p-2 relative"
+                              >
                                 字幕 (SUPER)
+                                <div 
+                                  className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                  onMouseDown={(e) => handleColResizeStart(e, 'subtitles')}
+                                />
                               </th>
-                              <th className="border-r-2 border-b-2 border-black p-2">
+                              <th 
+                                style={{ width: `${storyboardColWidths.visual}px` }}
+                                className="border-r-2 border-b-2 border-black p-2 relative"
+                              >
                                 画面内容描述
+                                <div 
+                                  className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                  onMouseDown={(e) => handleColResizeStart(e, 'visual')}
+                                />
                               </th>
                               {storyboardCols.map((col) => (
                                 <th
                                   key={col}
+                                  style={{ width: `${storyboardColWidths[col] || 150}px` }}
                                   className="border-r-2 border-b-2 border-black p-2 relative group"
                                 >
                                   {col}
@@ -3180,27 +3281,64 @@ export default function App() {
                                   >
                                     ×
                                   </button>
+                                  <div 
+                                    className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => handleColResizeStart(e, col)}
+                                  />
                                 </th>
                               ))}
-                              <th className="border-r-2 border-b-2 border-black p-2 w-20 text-center no-print">
+                              <th 
+                                style={{ width: `${storyboardColWidths.actions}px` }}
+                                className="border-r-2 border-b-2 border-black p-2 text-center no-print relative"
+                              >
                                 操作
+                                <div 
+                                  className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
+                                  onMouseDown={(e) => handleColResizeStart(e, 'actions')}
+                                />
                               </th>
-                              <th className="border-b-2 border-black p-2 w-64 bg-gray-50 font-bold text-center">
+                              <th 
+                                style={{ width: `${storyboardColWidths.preview}px` }}
+                                className="border-r-2 border-b-2 border-black p-2 bg-gray-50 font-bold text-center relative"
+                              >
                                 分镜视觉效果预览
+                                <div 
+                                  className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
+                                  onMouseDown={(e) => handleColResizeStart(e, 'preview')}
+                                />
                               </th>
-                              <th className="border-l-2 border-b-2 border-black p-2 w-48 bg-gray-50 font-bold">
+                              <th 
+                                style={{ width: `${storyboardColWidths.videoPrompt}px` }}
+                                className="border-l-2 border-b-2 border-black p-2 bg-gray-50 font-bold relative"
+                              >
                                 图生视频提示词
+                                <div 
+                                  className="absolute top-0 right-[-2px] w-[5px] h-full cursor-col-resize z-10 hover:bg-blue-400 select-none"
+                                  onMouseDown={(e) => handleColResizeStart(e, 'videoPrompt')}
+                                />
                               </th>
                             </tr>
                           </thead>
                           <tbody>
                             {results.storyboard.map((frame: any, i) => (
-                              <tr key={i} className="border-b border-black">
+                              <tr 
+                                key={i} 
+                                className="border-b border-black relative group/row"
+                                style={{ height: storyboardRowHeights[i] ? `${storyboardRowHeights[i]}px` : undefined }}
+                              >
                                 <td
-                                  className="border-r-2 border-black text-center font-bold"
+                                  className="border-r-2 border-black text-center font-bold relative"
                                   style={{ padding: `${tablePadding}px` }}
                                 >
                                   {frame.frameNumber}
+                                  {/* Row resize handle */}
+                                  <div 
+                                    className="absolute bottom-[-2px] left-0 w-full h-[5px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none"
+                                    onMouseDown={(e) => {
+                                      const rowEl = e.currentTarget.closest('tr');
+                                      if (rowEl) handleRowResizeStart(e, i, rowEl.offsetHeight);
+                                    }}
+                                  />
                                 </td>
                                 <td
                                   className="border-r-2 border-black"
