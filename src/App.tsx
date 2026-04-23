@@ -68,6 +68,7 @@ export default function App() {
   const [generatingMetaImage, setGeneratingMetaImage] = useState<string | null>(
     null,
   );
+  const [generatingFrames, setGeneratingFrames] = useState<Record<number, boolean>>({});
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -385,14 +386,38 @@ export default function App() {
     try {
       let prompt = "";
       if (type === "character") {
-        prompt = `Character Concept Art: ${item.name}. ${item.description}. Wearing: ${item.clothing}. Makeup/Style: ${item.makeup}. Professional character design sheet, neutral background, layout requirement: Left 1/3 of the image is a highly detailed front face close-up, right 2/3 of the image shows full body front view, side view, and back view. Top right corner contains 9 different micro-expressions (joy, anger, sorrow, happiness, etc.). highly detailed.`;
+        // Collect all custom column data for this character
+        const customData = characterCols
+          .map((col) => (item[col] ? `${col}: ${item[col]}` : ""))
+          .filter(Boolean)
+          .join(". ");
+
+        prompt = `Character Identity: ${item.name}.
+        [核心特征与性格描述]: ${item.description}.
+        [服装设定]: ${item.clothing}.
+        [妆造设定]: ${item.makeup}.
+        ${customData ? `[附加设定]: ${customData}.` : ""}
+        
+        STRICT REQUIREMENT: PURE WHITE BACKGROUND, clean white space, NO background elements, NO scenery, NO floor texture.
+        STYLE: Professional character design sheet, cinematic lighting, 8k, highly detailed.
+        LAYOUT: Left 1/3 is a detailed face close-up (looking at camera), right 2/3 is a full-body turnaround (front, side, back views). 
+        TOP RIGHT: 9 different facial expressions.`;
       } else if (type === "scene") {
         prompt = `Environment Concept Art: ${item.name}. Setting: ${item.setting}. Lighting: ${item.lighting}. Atmosphere: ${item.atmosphere}. Establishing shot, cinematic lighting, highly detailed environment design.`;
       } else if (type === "prop") {
         prompt = `Prop Design Concept Art: ${item.name}. Description: ${item.description}. Usage context: ${item.usage}. Clear product shot, isolated on neutral background, highly detailed asset design.`;
       }
 
-      prompt = buildPromptWithLayout(prompt);
+      // For characters, we bypass the global project context to strictly use the row data as requested
+      let finalPrompt = "";
+      if (type === "character") {
+        const styleSuffix = [globalStyle, customStyle, aspectRatio]
+          .filter(Boolean)
+          .join(", ");
+        finalPrompt = `${prompt}\n\n[Technical Specs]: ${styleSuffix}`;
+      } else {
+        finalPrompt = buildPromptWithLayout(prompt);
+      }
 
       let url;
       if (selectedEngine.startsWith("comfyui")) {
@@ -404,8 +429,8 @@ export default function App() {
           comfyUrl,
           comfyWorkflow,
           comfyNodeId,
-          prompt,
-          customStyle || globalStyle,
+          finalPrompt,
+          "", // Style is already in finalPrompt for character, or handles via buildPromptWithLayout for others
           false,
           currentSamplerConfig,
           isI2I ? referenceImages : undefined,
@@ -421,16 +446,19 @@ export default function App() {
           await import("./services/gemini");
         const apiKey = apiKeys[selectedEngine] || "";
         url = await generateWithOtherImageEngine(
-          prompt,
+          finalPrompt,
           selectedEngine as any,
           apiKey,
           aspectRatio,
         );
       } else {
         url = await generateFrameImage(
-          prompt,
-          globalStyle,
-          getProjectContext(),
+          finalPrompt,
+          // For characters, style is embedded. For others, we might want it separate or not, 
+          // but generateFrameImage appends style anyway. 
+          // Better pass Empty string for style if it's already in finalPrompt.
+          type === "character" ? "" : globalStyle,
+          type === "character" ? "" : getProjectContext(),
           aspectRatio,
           apiKeys.gemini,
         );
@@ -677,26 +705,35 @@ export default function App() {
     const id = activeTab === "analysis" ? "analysis-export-container" : "storyboard-export-container";
     
     // Wait for the scale transition and re-render
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 600));
     
     const element = document.getElementById(id);
     if (!element) {
       setZoomScale(originalScale);
+      alert("未找到导出内容容器");
       return;
     }
 
     try {
-      // Use higher scale for better print quality
+      // Use higher scale for better print quality, but cap it to avoid memory issues
       const canvas = await html2canvas(element, {
-        scale: 2,
+        scale: 1.5, // Reduced slightly from 2 to avoid memory errors in large elements
         useCORS: true,
-        logging: false,
+        logging: true, // Enable for debugging
         backgroundColor: "#ffffff",
-        windowWidth: element.scrollWidth,
-        allowTaint: true
+        windowWidth: 1400, // Fixed width for consistent layout capture
+        allowTaint: false,
+        imageTimeout: 15000,
+        onclone: (clonedDoc) => {
+          // Additional cleanup on the clone
+          const clonedElement = clonedDoc.getElementById(id);
+          if (clonedElement) {
+            clonedElement.style.transform = 'none';
+          }
+        }
       });
 
-      const imgData = canvas.toDataURL("image/jpeg", 0.95);
+      const imgData = canvas.toDataURL("image/jpeg", 0.9);
       // Analysis is usually portrait, Storyboard (16:9) is landscape
       const pdf = new jsPDF(activeTab === "analysis" ? "p" : "l", "mm", "a4");
       const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -708,32 +745,31 @@ export default function App() {
       let heightLeft = contentHeightInPdf;
       let position = 0;
 
-      // First page
+      // Add image to PDF with overflow handling
       pdf.addImage(imgData, "JPEG", 0, position, pdfWidth, contentHeightInPdf);
       heightLeft -= pdfHeight;
 
-      // Additional pages
-      while (heightLeft > 0) {
-        position = heightLeft - contentHeightInPdf;
+      while (heightLeft > 1) { // 1mm buffer
         pdf.addPage();
+        position = heightLeft - contentHeightInPdf;
         pdf.addImage(imgData, "JPEG", 0, position, pdfWidth, contentHeightInPdf);
         heightLeft -= pdfHeight;
       }
 
       pdf.save(`${projectName || "script_export"}_${activeTab}.pdf`);
-    } catch (err) {
+    } catch (err: any) {
       console.error("PDF export failed", err);
-      alert("PDF 导出过程中遇到错误，请尝试使用浏览器的 打印 (Command/Ctrl + P) -> 另存为 PDF 功能。");
+      // Detailed error alert
+      alert(`PDF 导出失败: ${err.message || "未知错误"}\n\n建议方案：\n1. 请使用浏览器的 打印 (Command/Ctrl + P) -> 另存为 PDF。\n2. 尝试减小分镜表的行数后再次导出。`);
     } finally {
       setZoomScale(originalScale);
     }
   };
 
   const handleExportWord = async () => {
-    // Zoom out to 100% first to ensure all elements are properly positioned for clone
     const originalScale = zoomScale;
     setZoomScale(1);
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 400));
 
     const id = activeTab === "analysis" ? "analysis-export-container" : "storyboard-export-container";
     const element = document.getElementById(id);
@@ -742,22 +778,24 @@ export default function App() {
       return;
     }
 
-    // Deep clone to avoid modifying live UI
     const clone = element.cloneNode(true) as HTMLElement;
     
-    // SYNC INPUT VALUES: CloneNode doesn't copy current value properties of inputs/textareas
+    // SYNC INPUT VALUES & SET EXPLICIT WIDTHS
+    const originalCells = element.querySelectorAll('th, td');
+    const cloneCells = clone.querySelectorAll('th, td');
+    
     const originalInputs = element.querySelectorAll('input, textarea');
     const cloneInputs = clone.querySelectorAll('input, textarea');
+    
+    // Replace inputs with spans
     originalInputs.forEach((input, idx) => {
       const val = (input as HTMLInputElement | HTMLTextAreaElement).value;
       const span = document.createElement('span');
       span.innerText = val;
-      // Preserve basic appearance
       if (input.tagName === 'TEXTAREA') {
         span.style.whiteSpace = 'pre-wrap';
         span.style.display = 'block';
         span.style.width = '100%';
-        span.style.minHeight = '1.5em';
       } else {
         span.style.display = 'inline-block';
         span.style.width = '100%';
@@ -767,19 +805,33 @@ export default function App() {
       }
     });
 
-    // Remove all no-print elements in clone
+    // Set explicit width attributes for all table cells based on their computed/style widths
+    originalCells.forEach((cell, idx) => {
+      const rect = cell.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      if (cloneCells[idx]) {
+        (cloneCells[idx] as HTMLElement).setAttribute('width', width.toString());
+        (cloneCells[idx] as HTMLElement).style.width = `${width}px`;
+      }
+    });
+
     clone.querySelectorAll('.no-print').forEach(el => el.remove());
     
-    // Replace SVGs or complex icons if needed (Lucide icons are SVGs)
-    // Most Word versions prefer static text or images
-    
-    // Convert all images to base64 to ensure they are embedded in the Word doc
     const images = clone.getElementsByTagName('img');
     for (let i = 0; i < images.length; i++) {
         const img = images[i];
+        
+        // Match image width to parent container for Word
+        const parentCell = img.closest('td, th');
+        if (parentCell) {
+          const cellWidth = parseInt(parentCell.getAttribute('width') || '300');
+          img.setAttribute('width', Math.min(cellWidth - 20, 480).toString());
+        } else {
+          img.setAttribute('width', '350');
+        }
+
         if (img.src && !img.src.startsWith('data:')) {
             try {
-                // Use fallback for cross-origin images if they fail standard fetch
                 const response = await fetch(img.src, { mode: 'cors' });
                 const blob = await response.blob();
                 const reader = new FileReader();
@@ -795,7 +847,6 @@ export default function App() {
     }
 
     const content = clone.innerHTML;
-    // Enhanced Word HTML header
     const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
                     <head><meta charset='utf-8'><title>Script Export</title>
                     <!--[if gte mso 9]>
@@ -813,21 +864,16 @@ export default function App() {
                       h1 { text-align: center; font-size: 22pt; margin-bottom: 15pt; }
                       h2 { font-size: 16pt; margin-top: 15pt; margin-bottom: 8pt; border-bottom: 1px solid black; padding-bottom: 4px; }
                       p { margin: 5pt 0; }
-                      table { border-collapse: collapse; width: 100%; margin-bottom: 20px; border: 2pt solid black; table-layout: fixed; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-                      th, td { border: 1pt solid black; padding: 6px; vertical-align: top; overflow: hidden; word-wrap: break-word; }
+                      table { border-collapse: collapse; width: 100%; margin-bottom: 20px; border: 1pt solid black; table-layout: fixed; }
+                      th, td { border: 1pt solid black; padding: 6px; vertical-align: top; word-wrap: break-word; overflow: visible; }
                       th { background-color: #f0f0f0; font-weight: bold; text-align: center; font-size: 10pt; }
                       td { font-size: 9pt; }
-                      .text-center { text-align: center; }
-                      img { max-width: 250px; height: auto; display: block; margin: 5px auto; }
-                      .bg-gray-100 { background-color: #f3f4f6; }
-                      .bg-gray-50 { background-color: #f9fafb; }
-                      .font-bold { font-weight: bold; }
+                      img { height: auto; display: block; margin: 5px auto; }
                     </style>
                     </head><body>`;
     const footer = "</body></html>";
     const sourceHTML = header + content + footer;
 
-    // Use UTF-8 with BOM for correct encoding in WPS/Word
     const blob = new Blob(["\ufeff", sourceHTML], {
       type: "application/vnd.ms-word;charset=utf-8",
     });
@@ -2847,9 +2893,21 @@ export default function App() {
                                             i,
                                           )
                                         }
-                                        className="text-[9px] bg-black text-white px-2 py-1 rounded"
+                                        disabled={generatingMetaImage === `character-${i}`}
+                                        className={`text-[9px] px-2 py-1 rounded flex items-center justify-center gap-1 transition-all ${
+                                          generatingMetaImage === `character-${i}` 
+                                            ? "bg-gray-600 border-gray-500 text-gray-300 cursor-not-allowed" 
+                                            : "bg-black text-white hover:bg-gray-800"
+                                        }`}
                                       >
-                                        生图
+                                        {generatingMetaImage === `character-${i}` ? (
+                                          <>
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                            生成中
+                                          </>
+                                        ) : (
+                                          "生图"
+                                        )}
                                       </button>
                                     </div>
                                     {/* Resizers */}
@@ -3184,9 +3242,21 @@ export default function App() {
                                         onClick={() =>
                                           generateMetaImage("scene", scene, i)
                                         }
-                                        className="text-[9px] bg-black text-white px-2 py-1 rounded"
+                                        disabled={generatingMetaImage === `scene-${i}`}
+                                        className={`text-[9px] px-2 py-1 rounded flex items-center justify-center gap-1 transition-all ${
+                                          generatingMetaImage === `scene-${i}` 
+                                            ? "bg-gray-600 border-gray-500 text-gray-300 cursor-not-allowed" 
+                                            : "bg-black text-white hover:bg-gray-800"
+                                        }`}
                                       >
-                                        生图
+                                        {generatingMetaImage === `scene-${i}` ? (
+                                          <>
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                            生成中
+                                          </>
+                                        ) : (
+                                          "生图"
+                                        )}
                                       </button>
                                     </div>
                                     {/* Resizers */}
@@ -3480,9 +3550,21 @@ export default function App() {
                                         onClick={() =>
                                           generateMetaImage("prop", prop, i)
                                         }
-                                        className="text-[9px] bg-black text-white px-2 py-1 rounded"
+                                        disabled={generatingMetaImage === `prop-${i}`}
+                                        className={`text-[9px] px-2 py-1 rounded flex items-center justify-center gap-1 transition-all ${
+                                          generatingMetaImage === `prop-${i}` 
+                                            ? "bg-gray-600 border-gray-500 text-gray-300 cursor-not-allowed" 
+                                            : "bg-black text-white hover:bg-gray-800"
+                                        }`}
                                       >
-                                        生图
+                                        {generatingMetaImage === `prop-${i}` ? (
+                                          <>
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                            生成中
+                                          </>
+                                        ) : (
+                                          "生图"
+                                        )}
                                       </button>
                                     </div>
                                     {/* Resizers */}
@@ -3982,59 +4064,80 @@ export default function App() {
                                     <button
                                       onClickCapture={async (e) => {
                                         e.stopPropagation();
-                                        const {
-                                          generateComfyUIFrame,
-                                          generateFrameImage,
-                                          generateWithOtherImageEngine,
-                                        } = await import("./services/gemini");
-                                        let url;
-                                        if (
-                                          selectedEngine.startsWith("comfyui")
-                                        ) {
-                                          const urls =
-                                            await generateComfyUIFrame(
-                                              comfyUrl,
-                                              comfyWorkflow,
-                                              comfyNodeId,
+                                        if (generatingFrames[i]) return;
+                                        setGeneratingFrames(prev => ({ ...prev, [i]: true }));
+                                        try {
+                                          const {
+                                            generateComfyUIFrame,
+                                            generateFrameImage,
+                                            generateWithOtherImageEngine,
+                                          } = await import("./services/gemini");
+                                          let url;
+                                          if (
+                                            selectedEngine.startsWith("comfyui")
+                                          ) {
+                                            const urls =
+                                              await generateComfyUIFrame(
+                                                comfyUrl,
+                                                comfyWorkflow,
+                                                comfyNodeId,
+                                                `Shot: ${frame.shotType}, Angle: ${frame.angle}. ${frame.visualDescription}. ${frame.composition}`,
+                                                customStyle || globalStyle,
+                                                false,
+                                                currentSamplerConfig,
+                                                undefined,
+                                                aspectRatio,
+                                              );
+                                            url = urls[0];
+                                          } else if (
+                                            selectedEngine === "jimeng" ||
+                                            selectedEngine === "kling" ||
+                                            selectedEngine === "mj"
+                                          ) {
+                                            const key =
+                                              apiKeys[selectedEngine] || "";
+                                            url =
+                                              await generateWithOtherImageEngine(
+                                                `Shot: ${frame.shotType}, Angle: ${frame.angle}. ${frame.visualDescription}. ${frame.composition}`,
+                                                selectedEngine as any,
+                                                key,
+                                                aspectRatio,
+                                              );
+                                          } else {
+                                            url = await generateFrameImage(
                                               `Shot: ${frame.shotType}, Angle: ${frame.angle}. ${frame.visualDescription}. ${frame.composition}`,
-                                              customStyle || globalStyle,
-                                              false,
-                                              currentSamplerConfig,
-                                              undefined,
+                                              globalStyle,
+                                              getProjectContext(),
                                               aspectRatio,
+                                              apiKeys.gemini,
                                             );
-                                          url = urls[0];
-                                        } else if (
-                                          selectedEngine === "jimeng" ||
-                                          selectedEngine === "kling" ||
-                                          selectedEngine === "mj"
-                                        ) {
-                                          const key =
-                                            apiKeys[selectedEngine] || "";
-                                          url =
-                                            await generateWithOtherImageEngine(
-                                              `Shot: ${frame.shotType}, Angle: ${frame.angle}. ${frame.visualDescription}. ${frame.composition}`,
-                                              selectedEngine as any,
-                                              key,
-                                              aspectRatio,
-                                            );
-                                        } else {
-                                          url = await generateFrameImage(
-                                            `Shot: ${frame.shotType}, Angle: ${frame.angle}. ${frame.visualDescription}. ${frame.composition}`,
-                                            globalStyle,
-                                            getProjectContext(),
-                                            aspectRatio,
-                                            apiKeys.gemini,
-                                          );
+                                          }
+                                          setFrameImages((prev) => ({
+                                            ...prev,
+                                            [frame.frameNumber]: url,
+                                          }));
+                                        } catch (err) {
+                                          console.error(err);
+                                          alert("生图失败: " + String(err));
+                                        } finally {
+                                          setGeneratingFrames(prev => ({ ...prev, [i]: false }));
                                         }
-                                        setFrameImages((prev) => ({
-                                          ...prev,
-                                          [frame.frameNumber]: url,
-                                        }));
                                       }}
-                                      className="text-[9px] bg-black text-white px-2 py-1 rounded"
+                                      disabled={generatingFrames[i]}
+                                      className={`text-[9px] px-2 py-1 rounded flex items-center justify-center gap-1 transition-all ${
+                                        generatingFrames[i] 
+                                          ? "bg-gray-600 border-gray-500 text-gray-300 cursor-not-allowed" 
+                                          : "bg-black text-white hover:bg-gray-800"
+                                      }`}
                                     >
-                                      生图
+                                      {generatingFrames[i] ? (
+                                        <>
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                          生成中
+                                        </>
+                                      ) : (
+                                        "生图"
+                                      )}
                                     </button>
                                   </div>
                                   {/* Resizers */}
