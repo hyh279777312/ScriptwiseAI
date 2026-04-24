@@ -1,14 +1,60 @@
 {
-  "name": "react-example",
-  "private": true,
-  "version": "0.0.0",
+  "name": "scriptwise-ai",
+  "productName": "ScriptwiseAI",
+  "version": "1.0.0",
+  "description": "火枪手超级分镜大师 PRO - AI 驱动的影视制作辅助系统",
+  "main": "main.cjs",
   "type": "module",
+  "author": "DevaHoo",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "clean": "rm -rf dist release",
+    "lint": "tsc --noEmit",
+    "dist": "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ npx electron-builder --mac --arm64 --dir"
+  },
+  "build": {
+    "appId": "com.devahoo.scriptwiseai",
+    "productName": "ScriptwiseAI",
+    "copyright": "Copyright © 2026 DevaHoo",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.cjs",
+      "package.json",
+      "WorkFlowSample/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "public/icon.icns",
+        "to": "resources/icon.icns"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dir"
+      ],
+      "category": "public.app-category.video",
+      "icon": "public/icon.icns"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 410,
+          "y": 150,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 130,
+          "y": 150,
+          "type": "file"
+        }
+      ]
+    }
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -33,6 +79,8 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
