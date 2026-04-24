@@ -58,6 +58,8 @@ import {
 
 export default function App() {
   const [script, setScript] = useState("");
+  const [uploadedScriptFile, setUploadedScriptFile] = useState<{name: string, text: string} | null>(null);
+  const [isDraggingScript, setIsDraggingScript] = useState(false);
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<AnalysisResult | null>(null);
@@ -1291,13 +1293,14 @@ export default function App() {
     e.preventDefault();
     const files = Array.from(e.dataTransfer.files) as File[];
     if (files.length === 0) return;
+    const file = files[0]; // just take the first file
 
     setIsExtractingDoc(true);
     try {
-      const texts = await Promise.all(
-        files.map((f: File) => extractTextFromFile(f)),
-      );
-      setScript((prev) => prev + (prev ? "\n\n" : "") + texts.join("\n\n"));
+      const text = await extractTextFromFile(file);
+      setUploadedScriptFile({ name: file.name, text });
+      setScript(""); // clear textarea
+      onAnalyze(text); // auto trigger analysis
     } catch (err) {
       console.error(err);
       alert("文档解析失败，暂不支持该格式或文件已损坏。");
@@ -1341,8 +1344,9 @@ export default function App() {
     e.target.value = ""; // Reset input
   };
 
-  const onAnalyze = async () => {
-    if (!script.trim()) return;
+  const onAnalyze = async (overrideScript?: string) => {
+    const scriptToAnalyze = overrideScript || uploadedScriptFile?.text || script;
+    if (!scriptToAnalyze.trim()) return;
     setIsAnalyzing(true);
     setRawAnalysisText("");
     try {
@@ -1352,7 +1356,7 @@ export default function App() {
         const analysisResult = await analyzeOllamaScript(
           analysisOllamaUrl,
           analysisOllamaModel,
-          script,
+          scriptToAnalyze,
         );
         if (analysisResult.parsed) {
           res = analysisResult.parsed;
@@ -1365,14 +1369,14 @@ export default function App() {
         const { analyzeScriptWithOtherLLM } = await import("./services/gemini");
         const key = analysisEngine === "gpt" ? apiKeys.gpt : apiKeys.doubao;
         res = await analyzeScriptWithOtherLLM(
-          script,
+          scriptToAnalyze,
           analysisEngine as any,
           key,
         );
         setResults(res);
       } else {
         res = await analyzeScript(
-          script,
+          scriptToAnalyze,
           referenceImages.map((img) => img.url),
           apiKeys.gemini,
         );
@@ -1867,17 +1871,46 @@ export default function App() {
                   )}
                 </div>
                 <div
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={handleScriptDrop}
-                  className="relative"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDraggingScript(true);
+                  }}
+                  onDragLeave={() => setIsDraggingScript(false)}
+                  onDrop={(e) => {
+                    setIsDraggingScript(false);
+                    handleScriptDrop(e);
+                  }}
+                  className={`relative border-2 transition-all rounded ${isDraggingScript ? "border-[var(--accent)] bg-[var(--accent)]/10 scale-[1.01]" : "border-transparent"}`}
                 >
-                  <textarea
-                    value={script}
-                    onChange={(e) => setScript(e.target.value)}
-                    placeholder="在这里输入您的故事脚本，或拖拽 txt/md/pdf/docx 文档至此..."
-                    disabled={isExtractingDoc}
-                    className="w-full h-48 bg-[#111] border border-[var(--border)] rounded p-3 text-sm text-white outline-none focus:border-[var(--accent)] transition-colors resize-none font-sans leading-relaxed disabled:opacity-50"
-                  />
+                  {uploadedScriptFile ? (
+                    <div className="w-full h-48 bg-[#111] border border-[var(--border)] rounded p-3 flex flex-col items-center justify-center relative">
+                      <div className="absolute top-2 right-2">
+                        <button 
+                          onClick={() => setUploadedScriptFile(null)}
+                          className="p-1 text-gray-400 hover:text-white bg-black/50 hover:bg-black/80 rounded"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="w-12 h-12 bg-[#222] rounded-full flex items-center justify-center mb-3">
+                        <FileText className="w-6 h-6 text-[var(--accent)]" />
+                      </div>
+                      <div className="text-white font-medium text-center px-4 w-full truncate max-w-[80%]">
+                        {uploadedScriptFile.name}
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-2 uppercase tracking-wider">
+                        已加载，正在准备智能分析...
+                      </div>
+                    </div>
+                  ) : (
+                    <textarea
+                      value={script}
+                      onChange={(e) => setScript(e.target.value)}
+                      placeholder="在这里输入您的故事脚本，或拖拽 txt/md/pdf/docx 文档至此..."
+                      disabled={isExtractingDoc}
+                      className="w-full h-48 bg-[#111] border border-[var(--border)] rounded p-3 text-sm text-white outline-none focus:border-[var(--accent)] transition-colors resize-none font-sans leading-relaxed disabled:opacity-50"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -1941,8 +1974,8 @@ export default function App() {
               </div>
 
               <button
-                onClick={onAnalyze}
-                disabled={isAnalyzing || !script.trim()}
+                onClick={() => onAnalyze()}
+                disabled={isAnalyzing || (!script.trim() && !uploadedScriptFile?.text.trim())}
                 className="w-full py-3 bg-[var(--accent)] text-black rounded font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-4 shadow-[0_0_15px_rgba(205,255,0,0.15)]"
               >
                 {isAnalyzing ? (

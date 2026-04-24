@@ -1,9 +1,10 @@
 import * as mammoth from 'mammoth';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configure pdfjs worker
-// Not using this setup if we can just rely on basic importing, but wait, pdfjs in vite often needs worker source:
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Configure pdfjs worker locally
+// @ts-ignore
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 export const extractTextFromFile = async (file: File): Promise<string> => {
   const ext = file.name.split('.').pop()?.toLowerCase();
