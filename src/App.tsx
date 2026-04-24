@@ -2505,6 +2505,7 @@ export default function App() {
                   comfyUrl={comfyUrl} 
                   comfyWorkflow={comfyWorkflow} 
                   comfyNodeId={comfyNodeId}
+                  localWorkflows={localWorkflows}
                 />
               </motion.div>
             ) : !results && !rawAnalysisText ? (

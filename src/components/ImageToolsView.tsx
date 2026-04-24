@@ -50,7 +50,8 @@ const TOOLS = [
   { id: 'relight', name: '光影重塑', icon: Sun, desc: '重新计算图片法线并打光，改变氛围', hasRef: true },
   { id: 'grid-story', name: '九宫格剧情推演', icon: Grid, desc: '上传单图，AI自动推演前后连贯的九宫格剧情，支持一键拆分' },
   { id: 'multi-angle', name: '多角度编辑', icon: Camera, desc: '指定拍摄角度、机位高度与景别，生成特定视角的图像', multiImage: false },
-  { id: 'upscale', name: '图片无损高清放大', icon: Maximize, desc: '补充细节纹理，支持2x/4x高清化' }
+  { id: 'upscale', name: '高清修复', icon: Maximize, desc: '补充细节纹理，支持2x/4x高清化' },
+  { id: 'remove-bg', name: '一键抠图', icon: Scissors, desc: '自动识别主体并去除背景，返回透明通道图' }
 ];
 
 function ImageUploadArea({ 
@@ -127,11 +128,13 @@ function ImageUploadArea({
 export function ImageToolsView({
   comfyUrl,
   comfyWorkflow,
-  comfyNodeId
+  comfyNodeId,
+  localWorkflows
 }: {
   comfyUrl?: string;
   comfyWorkflow?: string;
   comfyNodeId?: string;
+  localWorkflows?: any[];
 }) {
   const [activeTool, setActiveTool] = useState<string>(TOOLS[0].id);
   const [sourceImages, setSourceImages] = useState<string[]>([]);
@@ -145,6 +148,8 @@ export function ImageToolsView({
   const [multiAngleFront, setMultiAngleFront] = useState(MULTI_ANGLE_OPTIONS.front[0].value);
   const [multiAngleElevation, setMultiAngleElevation] = useState(MULTI_ANGLE_OPTIONS.elevation[1].value);
   const [multiAngleShot, setMultiAngleShot] = useState(MULTI_ANGLE_OPTIONS.shot[1].value);
+  
+  const [upscaleMultiplier, setUpscaleMultiplier] = useState("2X");
   
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
@@ -213,7 +218,24 @@ export function ImageToolsView({
     setSplitResults([]);
     
     try {
-      if (comfyUrl && comfyWorkflow && comfyNodeId) {
+      let workflowToUse = comfyWorkflow;
+      if (currentTool?.id === 'upscale' && localWorkflows) {
+        const targetWorkflow = localWorkflows.find(w => w.filename.includes(upscaleMultiplier));
+        if (targetWorkflow) {
+          workflowToUse = JSON.stringify(targetWorkflow.content);
+        } else {
+          console.warn(`未找到包含 "${upscaleMultiplier}" 的预设工作流，将使用当前默认工作流。`);
+        }
+      } else if (currentTool?.id === 'remove-bg' && localWorkflows) {
+        const targetWorkflow = localWorkflows.find(w => w.filename.toLowerCase().includes('remove-bg') || w.filename.toLowerCase().includes('rembg'));
+        if (targetWorkflow) {
+          workflowToUse = JSON.stringify(targetWorkflow.content);
+        } else {
+          console.warn(`未找到匹配一键抠图(remove-bg)的预设工作流，将使用当前默认工作流进行。`);
+        }
+      }
+
+      if (comfyUrl && workflowToUse && comfyNodeId) {
         // Collect valid images to send as reference images
         const validImgs = sourceImages.filter(img => img.trim() !== "");
         if (currentTool?.hasRef && refImage) {
@@ -227,7 +249,7 @@ export function ImageToolsView({
         
         const resImages = await generateComfyUIFrame(
           comfyUrl,
-          comfyWorkflow,
+          workflowToUse,
           comfyNodeId,
           finalPrompt,
           "",
@@ -473,6 +495,30 @@ export function ImageToolsView({
                           <option key={opt.value} value={opt.value}>{opt.label}</option>
                         ))}
                       </select>
+                    </div>
+                  </motion.div>
+                )}
+                {/* Upscale Options */}
+                {currentTool.id === 'upscale' && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                    className="mt-4"
+                  >
+                    <div className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2">放大倍数</div>
+                    <div className="flex gap-4">
+                      {['2X', '4X', '8X'].map(mult => (
+                        <button
+                          key={mult}
+                          onClick={() => setUpscaleMultiplier(mult)}
+                          className={`flex-1 py-3 rounded-lg font-bold transition-colors ${
+                            upscaleMultiplier === mult 
+                              ? 'bg-[var(--accent)] text-black' 
+                              : 'bg-[#1a1a1a] border border-[#333] text-gray-400 hover:border-gray-500 hover:text-white'
+                          }`}
+                        >
+                          {mult}
+                        </button>
+                      ))}
                     </div>
                   </motion.div>
                 )}
