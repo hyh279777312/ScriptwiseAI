@@ -104,7 +104,7 @@ export async function optimizeEntityPrompt(
     let resultText = "";
     if (engine === "gemini") {
       const currentAi = getAiClient(apiKey);
-      const model = "gemini-3.1-pro";
+      const model = "gemini-3.1-pro-preview";
       const response = await currentAi.models.generateContent({
         model,
         contents: { parts: [{ text: prompt }] },
@@ -178,7 +178,7 @@ export async function optimizeStoryboardPrompt(
   try {
     if (engine === "gemini") {
       const currentAi = getAiClient(apiKey);
-      const model = "gemini-3.1-pro";
+      const model = "gemini-3.1-pro-preview";
       const response = await currentAi.models.generateContent({
         model,
         contents: { parts: [{ text: prompt }] },
@@ -238,7 +238,7 @@ export async function optimizeStoryboardPrompt(
 }
 
 export async function analyzeScript(script: string, referenceImages?: string[], customApiKey?: string): Promise<AnalysisResult> {
-  const model = "gemini-3.1-pro"; // Using the best available Pro model for analysis
+  const model = "gemini-3.1-pro-preview"; // Using the best available Pro model for analysis
   const currentAi = getAiClient(customApiKey);
   
   const contentParts: any[] = [
@@ -351,7 +351,7 @@ export async function analyzeScript(script: string, referenceImages?: string[], 
     const errorStr = JSON.stringify(error) + String(error);
     if (errorStr.includes("429") || errorStr.includes("RESOURCE_EXHAUSTED")) {
       console.warn("Gemini 3.1 Pro quota exhausted. Falling back to Gemini 2.5 Flash...");
-      response = await callModel("gemini-2.5-flash"); // Fallback to a model with higher free tier
+      response = await callModel("gemini-3-flash-preview"); // Fallback to a model with higher free tier
     } else {
       throw error;
     }
@@ -427,6 +427,9 @@ ${script}
       throw new Error("Ollama 返回数据格式异常，无法提取文本。");
     }
   } catch (err: any) {
+    if (err.message === "Failed to fetch") {
+      throw new Error("本地 Ollama 调用失败：无法连接。请检查 Ollama 是否已启动，并配置了 OLLAMA_ORIGINS=\"*\"");
+    }
     throw new Error(`本地 Ollama 调用失败: ${err.message || '未知错误'}`);
   }
 }
@@ -775,7 +778,7 @@ export async function generateFrameImage(
   const isDefaultKey = !customApiKey;
   
   // 使用正式版 3.1 Flash Image 模型
-  let model = "gemini-3.1-flash-image";
+  let model = "gemini-3.1-flash-image-preview";
   
   const prompt = `
     视觉创作指令 (Visual Directive):
@@ -822,7 +825,7 @@ export async function generateGridImage(
   customApiKey?: string
 ): Promise<string> {
   const currentAi = getAiClient(customApiKey);
-  const model = "gemini-3.1-flash-image";
+  const model = "gemini-3.1-flash-image-preview";
   
   const framesText = frames.map(f => `格 ${f.number}: ${f.description}`).join('\n');
   

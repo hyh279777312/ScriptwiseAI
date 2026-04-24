@@ -16,6 +16,7 @@ import { Card, Badge, SectionTitle } from "./components/UI";
 import { extractTextFromFile } from "./lib/extract";
 import { StoryboardFrameCard } from "./components/StoryboardFrameCard";
 import { LoginModal } from "./components/LoginModal";
+import { ImageToolsView } from "./components/ImageToolsView";
 import {
   Film,
   Users,
@@ -64,7 +65,7 @@ export default function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<AnalysisResult | null>(null);
   const [frameImages, setFrameImages] = useState<Record<number, string>>({});
-  const [activeTab, setActiveTab] = useState<"analysis" | "storyboard">(
+  const [activeTab, setActiveTab] = useState<"analysis" | "storyboard" | "image-tools">(
     "analysis",
   );
   const [generatingMetaImage, setGeneratingMetaImage] = useState<string | null>(
@@ -182,10 +183,19 @@ export default function App() {
   const [localWorkflows, setLocalWorkflows] = useState<any[]>([]);
 
   useEffect(() => {
-    fetch("/api/workflows")
-      .then((res) => res.json())
-      .then((data) => setLocalWorkflows(data))
-      .catch((err) => console.error("Failed to load workflows:", err));
+    try {
+      const workflowModules = (import.meta as any).glob('../WorkFlowSample/*.json', { eager: true });
+      const workflows = Object.entries(workflowModules).map(([path, moduleExport]) => {
+        const filename = path.split('/').pop() || '';
+        return {
+          filename,
+          content: (moduleExport as any).default || moduleExport
+        };
+      });
+      setLocalWorkflows(workflows);
+    } catch (err) {
+      console.error("Failed to load workflows:", err);
+    }
   }, []);
 
   const handleSelectLocalWorkflow = (filename: string) => {
@@ -1746,20 +1756,23 @@ export default function App() {
           <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-tight font-bold">
             Powered By DevaHoo
           </div>
-          {results && (
-            <div className="flex bg-[var(--bg)] p-1 rounded border border-[var(--border)]">
-              <TabButton
-                active={activeTab === "analysis"}
-                onClick={() => setActiveTab("analysis")}
-                label="资产分析表"
-              />
-              <TabButton
-                active={activeTab === "storyboard"}
-                onClick={() => setActiveTab("storyboard")}
-                label="分镜矩阵图"
-              />
-            </div>
-          )}
+          <div className="flex bg-[var(--bg)] p-1 rounded border border-[var(--border)]">
+            <TabButton
+              active={activeTab === "analysis"}
+              onClick={() => setActiveTab("analysis")}
+              label="资产分析表"
+            />
+            <TabButton
+              active={activeTab === "storyboard"}
+              onClick={() => setActiveTab("storyboard")}
+              label="分镜矩阵图"
+            />
+            <TabButton
+              active={activeTab === "image-tools"}
+              onClick={() => setActiveTab("image-tools")}
+              label="智能图像处理"
+            />
+          </div>
 
           {currentUser ? (
             <div className="flex items-center gap-2">
@@ -2480,7 +2493,21 @@ export default function App() {
         {/* Content Area */}
         <div className="flex-1 bg-[var(--bg)] overflow-y-auto p-6 custom-scrollbar">
           <AnimatePresence mode="wait">
-            {!results && !rawAnalysisText ? (
+            {activeTab === "image-tools" ? (
+              <motion.div
+                key="image-tools"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0 }}
+                className="w-full h-full"
+              >
+                <ImageToolsView 
+                  comfyUrl={comfyUrl} 
+                  comfyWorkflow={comfyWorkflow} 
+                  comfyNodeId={comfyNodeId}
+                />
+              </motion.div>
+            ) : !results && !rawAnalysisText ? (
               <motion.div
                 key="empty"
                 initial={{ opacity: 0 }}
