@@ -179,29 +179,12 @@ export default function App() {
   );
   const [localWorkflows, setLocalWorkflows] = useState<any[]>([]);
 
-  // ================= 核心修改区域：静态打包引入工作流 JSON =================
   useEffect(() => {
-    try {
-      // 使用 Vite 原生能力在打包时静态加载本地 JSON 文件，彻底解决打包后 fetch 失败的问题
-      const modules = import.meta.glob('../WorkFlowSample/*.json', { eager: true });
-      
-      const loadedWorkflows = Object.keys(modules).map((filePath) => {
-        const filename = filePath.split('/').pop() || '';
-        // 获取实际内容 (如果用了 ES Module 则在 .default 中)
-        const content = (modules[filePath] as any).default || modules[filePath];
-        
-        return {
-          filename,
-          content
-        };
-      });
-      
-      setLocalWorkflows(loadedWorkflows);
-    } catch (err) {
-      console.error("Failed to load local workflows:", err);
-    }
+    fetch("/api/workflows")
+      .then((res) => res.json())
+      .then((data) => setLocalWorkflows(data))
+      .catch((err) => console.error("Failed to load workflows:", err));
   }, []);
-  // ===================================================================
 
   const handleSelectLocalWorkflow = (filename: string) => {
     const workflow = localWorkflows.find((w) => w.filename === filename);
@@ -886,6 +869,15 @@ export default function App() {
     const content = clone.innerHTML;
     const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
                     <head><meta charset='utf-8'><title>Script Export</title>
+                    <!--[if gte mso 9]>
+                    <xml>
+                    <w:WordDocument>
+                    <w:View>Print</w:View>
+                    <w:Zoom>100</w:Zoom>
+                    <w:DoNotOptimizeForBrowser/>
+                    </w:WordDocument>
+                    </xml>
+                    <![endif]-->
                     <style>
                       @page { size: landscape; margin: 0.5in; mso-page-orientation: landscape; }
                       body { font-family: 'SimSun', 'Microsoft YaHei', 'Arial', sans-serif; line-height: 1.4; color: black; }
