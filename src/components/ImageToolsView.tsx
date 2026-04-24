@@ -86,16 +86,17 @@ function ImageUploadArea({
 
   return (
     <div 
-      className={`relative min-h-[200px] rounded-lg border-2 border-dashed transition-all flex flex-col items-center justify-center overflow-hidden group 
-        ${isDragging ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-[var(--border)] bg-[#0a0a0a] hover:border-gray-500'} 
+      className={`relative rounded-xl border-dashed transition-all flex flex-col items-center justify-center overflow-hidden group 
+        ${isDragging ? 'border-[var(--accent)] bg-[var(--accent)]/10 border-2' : 'border-[var(--border)] bg-[#0a0a0a] hover:border-gray-500 border'} 
+        ${!image ? 'aspect-video w-full' : 'w-full h-fit flex-none border-0 bg-transparent'}
         ${className}`}
       onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
       onDragLeave={() => setIsDragging(false)}
       onDrop={onDrop}
     >
       {image ? (
-        <>
-          <img src={image} alt="Source" className="w-full h-full object-contain absolute inset-0 z-0 p-2" />
+        <div className="relative w-full h-auto rounded-xl overflow-hidden border border-[#333]">
+          <img src={image} alt="Source" className="w-full h-auto object-contain z-0 block" />
           <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity z-10 flex flex-col items-center justify-center cursor-pointer gap-3">
             <label className="text-black bg-[var(--accent)] px-4 py-2 rounded-full text-sm font-bold flex items-center gap-2 cursor-pointer hover:scale-105 transition-transform">
               <Upload className="w-4 h-4" /> 更换图片
@@ -110,9 +111,9 @@ function ImageUploadArea({
               </button>
             )}
           </div>
-        </>
+        </div>
       ) : (
-        <label className="w-full h-full flex flex-col items-center justify-center cursor-pointer z-10 relative cursor-pointer">
+        <label className="w-full h-full flex flex-col items-center justify-center cursor-pointer z-10 relative">
           <div className="w-12 h-12 rounded-full bg-[#1a1a1a] group-hover:bg-[var(--accent)]/10 flex items-center justify-center mb-3 transition-colors">
             <Upload className="w-6 h-6 text-gray-500 group-hover:text-[var(--accent)]" />
           </div>
@@ -407,7 +408,7 @@ export function ImageToolsView({
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.9 }}
                         layout
-                        className="w-full flex-1 min-h-[200px] flex"
+                        className="w-full flex"
                       >
                         <ImageUploadArea 
                           className="flex-1"
@@ -429,7 +430,6 @@ export function ImageToolsView({
                   >
                     <div className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2">光影参考图 (可选)</div>
                     <ImageUploadArea 
-                      className="h-[150px]"
                       image={refImage}
                       onImageChange={setRefImage}
                       onRemove={() => setRefImage(null)}
@@ -552,7 +552,7 @@ export function ImageToolsView({
                 )}
               </div>
               
-              <div className="flex-1 rounded-2xl border border-[var(--border)] bg-[#0a0a0a] overflow-hidden relative flex flex-col p-4">
+              <div className={`rounded-2xl border border-[var(--border)] bg-[#0a0a0a] overflow-hidden relative flex flex-col p-4 w-full ${!resultImage && splitResults.length === 0 ? 'aspect-video flex-none' : 'h-fit flex-none'}`}>
                 {!resultImage && !isProcessing && (
                   <div className="flex-1 flex flex-col justify-center items-center text-gray-600 gap-4">
                     <ImageIcon className="w-16 h-16 opacity-20" />
@@ -581,10 +581,10 @@ export function ImageToolsView({
                 {resultImage && !isProcessing && (
                   <motion.div 
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                    className="flex-1 w-full h-full flex flex-col relative"
+                    className="w-full flex-none flex flex-col relative"
                   >
                     {splitResults.length > 0 ? (
-                      <div className="grid grid-cols-3 gap-2 flex-1 w-full h-full overflow-y-auto pr-2 custom-scrollbar relative">
+                      <div className="grid grid-cols-3 gap-2 w-full flex-none pr-2 custom-scrollbar relative">
                         {splitResults.map((res, i) => (
                           <div 
                             key={i} 
@@ -607,11 +607,11 @@ export function ImageToolsView({
                         ))}
                       </div>
                     ) : (
-                      <div className="flex-1 flex items-center justify-center bg-black rounded-xl overflow-hidden relative group">
+                      <div className="w-full flex items-center justify-center bg-black rounded-xl overflow-hidden relative group">
                         <img 
                           src={resultImage} 
                           alt="Result" 
-                          className="w-full h-full object-contain cursor-pointer transition-transform duration-500 group-hover:scale-105" 
+                          className="w-full h-auto object-contain cursor-pointer transition-transform duration-500 group-hover:scale-105 block" 
                           onClick={() => setPreviewImage(resultImage)}
                         />
                         <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">

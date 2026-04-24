@@ -113,7 +113,7 @@ export default function App() {
   const [analysisOllamaUrl, setAnalysisOllamaUrl] = useState(
     "http://127.0.0.1:11434",
   );
-  const [selectedEngine, setSelectedEngine] = useState<string>("comfyui_t2i");
+  const [selectedEngine, setSelectedEngine] = useState<string>("comfyui");
   const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188");
   const [comfyNodeId, setComfyNodeId] = useState("6");
   const [comfyBatchMode, setComfyBatchMode] = useState(false);
@@ -182,29 +182,21 @@ export default function App() {
   );
   const [localWorkflows, setLocalWorkflows] = useState<any[]>([]);
 
-  // ================= 核心修改区域：静态打包引入工作流 JSON =================
   useEffect(() => {
     try {
-      // 使用 Vite 原生能力在打包时静态加载本地 JSON 文件，彻底解决打包后 fetch 失败的问题
-      const modules = import.meta.glob('../WorkFlowSample/*.json', { eager: true });
-      
-      const loadedWorkflows = Object.keys(modules).map((filePath) => {
-        const filename = filePath.split('/').pop() || '';
-        // 获取实际内容 (如果用了 ES Module 则在 .default 中)
-        const content = (modules[filePath] as any).default || modules[filePath];
-        
+      const workflowModules = (import.meta as any).glob('../WorkFlowSample/*.json', { eager: true });
+      const workflows = Object.entries(workflowModules).map(([path, moduleExport]) => {
+        const filename = path.split('/').pop() || '';
         return {
           filename,
-          content
+          content: (moduleExport as any).default || moduleExport
         };
       });
-      
-      setLocalWorkflows(loadedWorkflows);
+      setLocalWorkflows(workflows);
     } catch (err) {
-      console.error("Failed to load local workflows:", err);
+      console.error("Failed to load workflows:", err);
     }
   }, []);
-  // ===================================================================
 
   const handleSelectLocalWorkflow = (filename: string) => {
     const workflow = localWorkflows.find((w) => w.filename === filename);
@@ -461,9 +453,6 @@ export default function App() {
 
       let url;
       if (selectedEngine.startsWith("comfyui")) {
-        const isI2I =
-          selectedEngine === "comfyui_i2i" ||
-          selectedEngine === "comfyui_i2i_prompt";
         const { generateComfyUIFrame } = await import("./services/gemini");
         const urls = await generateComfyUIFrame(
           comfyUrl,
@@ -473,7 +462,7 @@ export default function App() {
           "", // Style is already in finalPrompt for character, or handles via buildPromptWithLayout for others
           false,
           currentSamplerConfig,
-          isI2I ? referenceImages : undefined,
+          referenceImages && referenceImages.length > 0 ? referenceImages : undefined,
           aspectRatio,
         );
         url = urls[0];
@@ -889,6 +878,15 @@ export default function App() {
     const content = clone.innerHTML;
     const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
                     <head><meta charset='utf-8'><title>Script Export</title>
+                    <!--[if gte mso 9]>
+                    <xml>
+                    <w:WordDocument>
+                    <w:View>Print</w:View>
+                    <w:Zoom>100</w:Zoom>
+                    <w:DoNotOptimizeForBrowser/>
+                    </w:WordDocument>
+                    </xml>
+                    <![endif]-->
                     <style>
                       @page { size: landscape; margin: 0.5in; mso-page-orientation: landscape; }
                       body { font-family: 'SimSun', 'Microsoft YaHei', 'Arial', sans-serif; line-height: 1.4; color: black; }
@@ -1524,9 +1522,6 @@ export default function App() {
 
     // -- BATCH MODE EXPERIMENT FOR COMFYUI --
     if (selectedEngine.startsWith("comfyui") && comfyBatchMode) {
-      const isI2I =
-        selectedEngine === "comfyui_i2i" ||
-        selectedEngine === "comfyui_i2i_prompt";
       setGenStatus(
         `正在批量发送请求到 ComfyUI 队列 (${pendingFrames.length}张图)...`,
       );
@@ -1552,7 +1547,7 @@ export default function App() {
           "", // Style is already combined above
           true, // isBatchMode
           currentSamplerConfig,
-          isI2I ? referenceImages : undefined,
+          referenceImages && referenceImages.length > 0 ? referenceImages : undefined,
           aspectRatio,
         );
 
@@ -1589,9 +1584,6 @@ export default function App() {
         try {
           let url;
           if (selectedEngine.startsWith("comfyui")) {
-            const isI2I =
-              selectedEngine === "comfyui_i2i" ||
-              selectedEngine === "comfyui_i2i_prompt";
             const { generateComfyUIFrame } = await import("./services/gemini");
             const urls = await generateComfyUIFrame(
               comfyUrl,
@@ -1601,7 +1593,7 @@ export default function App() {
               customStyle || globalStyle,
               false, // isBatchMode
               currentSamplerConfig,
-              isI2I ? referenceImages : undefined,
+              referenceImages && referenceImages.length > 0 ? referenceImages : undefined,
               aspectRatio,
             );
             url = urls[0];
@@ -2087,22 +2079,10 @@ export default function App() {
                         Google Gemini (推荐)
                       </option>
                       <option
-                        value="comfyui_t2i"
+                        value="comfyui"
                         className="text-[var(--accent)] bg-[#111]"
                       >
-                        ComfyUI 文生图
-                      </option>
-                      <option
-                        value="comfyui_i2i"
-                        className="text-[var(--accent)] bg-[#111]"
-                      >
-                        ComfyUI 图生图
-                      </option>
-                      <option
-                        value="comfyui_i2i_prompt"
-                        className="text-[var(--accent)] bg-[#111]"
-                      >
-                        ComfyUI 语义改图
+                        本地 ComfyUI 
                       </option>
                       {apiKeys.jimeng && (
                         <option
@@ -2133,14 +2113,11 @@ export default function App() {
 
                   {selectedEngine.startsWith("comfyui") && (
                     <div className="space-y-2 mt-3 p-2 bg-[#2a2c31] border border-[var(--border)] rounded">
-                      {(selectedEngine === "comfyui_i2i" ||
-                        selectedEngine === "comfyui_i2i_prompt") && (
-                        <div className="text-[10px] text-[var(--accent)] font-mono leading-tight mb-2 italic">
-                          ⚠️ 提示：请加载您的图生图工作流 (API
-                          JSON)，系统会自动上传参考图并替换工作流中的 LoadImage
-                          节点图片为您关联设定的视觉参考图。
-                        </div>
-                      )}
+                      <div className="text-[10px] text-[var(--accent)] font-mono leading-tight mb-2 italic">
+                        ⚠️ 提示：如果要跑图生图，请加载您的图生图工作流 (API
+                        JSON)，系统会自动上传参考图并替换工作流中的 LoadImage
+                        节点图片为您关联设定的视觉参考图。
+                      </div>
                       <div>
                         <label className="text-[10px] uppercase font-bold text-white opacity-60">
                           API 地址 (需开启 --listen)

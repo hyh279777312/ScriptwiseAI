@@ -75,7 +75,6 @@ export function StoryboardFrameCard({
       try {
         let url;
         if (engineConfigs?.engine?.startsWith("comfyui")) {
-          const isI2I = engineConfigs.engine === "comfyui_i2i" || engineConfigs.engine === "comfyui_i2i_prompt";
           const urls = await generateComfyUIFrame(
             engineConfigs.comfyUrl,
             engineConfigs.comfyWorkflow,
@@ -84,7 +83,7 @@ export function StoryboardFrameCard({
             "", // Style already in finalPrompt
             false, // isBatchMode
             undefined, // sampler config
-            isI2I ? engineConfigs.referenceImages : undefined
+            engineConfigs.referenceImages && engineConfigs.referenceImages.length > 0 ? engineConfigs.referenceImages : undefined
           );
           url = urls[0];
         } else if (engineConfigs?.engine === "jimeng" || engineConfigs?.engine === "kling" || engineConfigs?.engine === "mj") {
