@@ -59,7 +59,7 @@ import {
 
 export default function App() {
   const [script, setScript] = useState("");
-  const [uploadedScriptFile, setUploadedScriptFile] = useState<{name: string, text: string} | null>(null);
+  const [uploadedScriptFile, setUploadedScriptFile] = useState<{name: string, file: File} | null>(null);
   const [isDraggingScript, setIsDraggingScript] = useState(false);
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -184,17 +184,77 @@ export default function App() {
 
   useEffect(() => {
     try {
-      const workflowModules = (import.meta as any).glob('../WorkFlowSample/*.json', { eager: true });
-      const workflows = Object.entries(workflowModules).map(([path, moduleExport]) => {
-        const filename = path.split('/').pop() || '';
-        return {
-          filename,
-          content: (moduleExport as any).default || moduleExport
-        };
-      });
-      setLocalWorkflows(workflows);
+      // Fetch dynamic workflows in dev using the vite server API, 
+      // or fallback to statically bundled raw strings in production dist bundle.
+      fetch('/api/workflows')
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) {
+             setLocalWorkflows(data);
+          } else {
+             throw new Error("No dynamic workflows found, using static fallback.");
+          }
+        })
+        .catch((err) => {
+          console.warn("API 并没有返回动态 Workflows (可能是打包后), 尝试使用静态提取...", err);
+          if (typeof window !== 'undefined' && (window as any).require) {
+            try {
+              const fs = (window as any).require('fs');
+              const path = (window as any).require('path');
+              const process = (window as any).require('process');
+              
+              // 寻找本地 WorkFlowSample (打包前或打包后 extraResources 中)
+              let workflowDir = path.join(process.cwd(), 'WorkFlowSample');
+              if (!fs.existsSync(workflowDir) && process.resourcesPath) {
+                 workflowDir = path.join(process.resourcesPath, 'WorkFlowSample');
+              }
+              
+              if (fs.existsSync(workflowDir)) {
+                console.log("Electron: 找到本地 WorkFlowSample 路径", workflowDir);
+                const files = fs.readdirSync(workflowDir);
+                const workflows: any[] = [];
+                for (const file of files) {
+                  if (file.endsWith('.json')) {
+                    const contentStr = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+                    try {
+                      workflows.push({ filename: file, content: JSON.parse(contentStr) });
+                    } catch (e) {
+                      console.error("解析 Electron 目录工作流出错", file, e);
+                    }
+                  }
+                }
+                if (workflows.length > 0) {
+                  setLocalWorkflows(workflows);
+                  return;
+                }
+              }
+            } catch (fsErr) {
+              console.warn("Electron 读取文件失败:", fsErr);
+            }
+          }
+
+          try {
+            const workflowModules = (import.meta as any).glob('../WorkFlowSample/*.json', { eager: true, query: '?raw', import: 'default' });
+            const workflows = Object.entries(workflowModules).map(([path, moduleExport]) => {
+              const filename = path.split('/').pop() || '';
+              let content = {};
+              try {
+                content = typeof moduleExport === 'string' ? JSON.parse(moduleExport) : ((moduleExport as any).default || moduleExport);
+              } catch (e) {
+                console.error("Failed to parse workflow json:", filename, e);
+              }
+              return {
+                filename,
+                content
+              };
+            });
+            setLocalWorkflows(workflows);
+          } catch (e) {
+             console.error("Failed to load static workflows via glob:", e);
+          }
+        });
     } catch (err) {
-      console.error("Failed to load workflows:", err);
+      console.error("Failed to initialize workflows:", err);
     }
   }, []);
 
@@ -1302,18 +1362,8 @@ export default function App() {
     if (files.length === 0) return;
     const file = files[0]; // just take the first file
 
-    setIsExtractingDoc(true);
-    try {
-      const text = await extractTextFromFile(file);
-      setUploadedScriptFile({ name: file.name, text });
-      setScript(""); // clear textarea
-      onAnalyze(text); // auto trigger analysis
-    } catch (err) {
-      console.error(err);
-      alert("文档解析失败，暂不支持该格式或文件已损坏。");
-    } finally {
-      setIsExtractingDoc(false);
-    }
+    setUploadedScriptFile({ name: file.name, file });
+    setScript(""); // clear textarea
   };
 
   const handleImageDrop = (e: React.DragEvent) => {
@@ -1352,60 +1402,143 @@ export default function App() {
   };
 
   const onAnalyze = async (overrideScript?: string) => {
-    const scriptToAnalyze = overrideScript || uploadedScriptFile?.text || script;
+    let scriptToAnalyze = overrideScript || script;
+    
+    if (!overrideScript && uploadedScriptFile?.file) {
+      setIsExtractingDoc(true);
+      try {
+        scriptToAnalyze = await extractTextFromFile(uploadedScriptFile.file);
+      } catch (err) {
+        console.error(err);
+        alert("文档解析失败，暂不支持该格式或文件已损坏。");
+        setIsExtractingDoc(false);
+        return;
+      }
+      setIsExtractingDoc(false);
+    }
+
     if (!scriptToAnalyze.trim()) return;
+
+    // 分段处理逻辑 (每段约 2000 字)
+    const CHUNK_SIZE = 2000;
+    const segments: string[] = [];
+    if (scriptToAnalyze.length > CHUNK_SIZE + 400) {
+      let remaining = scriptToAnalyze;
+      while (remaining.length > 0) {
+        if (remaining.length <= CHUNK_SIZE + 400) {
+          segments.push(remaining);
+          break;
+        }
+        let cutIndex = remaining.lastIndexOf("\n", CHUNK_SIZE);
+        if (cutIndex === -1 || cutIndex < CHUNK_SIZE * 0.7) cutIndex = CHUNK_SIZE;
+        segments.push(remaining.substring(0, cutIndex));
+        remaining = remaining.substring(cutIndex).trim();
+      }
+    } else {
+      segments.push(scriptToAnalyze);
+    }
+
     setIsAnalyzing(true);
     setRawAnalysisText("");
+    setResults(null); 
+    setGenStatus("正在初始化分析...");
+
     try {
-      let res;
-      if (analysisEngine === "ollama") {
-        const { analyzeOllamaScript } = await import("./services/gemini");
-        const analysisResult = await analyzeOllamaScript(
-          analysisOllamaUrl,
-          analysisOllamaModel,
-          scriptToAnalyze,
-        );
-        if (analysisResult.parsed) {
-          res = analysisResult.parsed;
-          setResults(res);
+      let combinedResults: AnalysisResult = {
+        characters: [],
+        scenes: [],
+        props: [],
+        storyboard: []
+      };
+
+      for (let i = 0; i < segments.length; i++) {
+        const progressMessage = segments.length > 1 
+          ? `正在分析第 ${i + 1}/${segments.length} 段脚本...` 
+          : "正在深度解析脚本内容...";
+        setGenStatus(progressMessage);
+        
+        const currentSegment = segments[i];
+        let currentRes: AnalysisResult | null = null;
+        let rawText = "";
+
+        if (analysisEngine === "ollama") {
+          const { analyzeOllamaScript } = await import("./services/gemini");
+          const analysisResult = await analyzeOllamaScript(
+            analysisOllamaUrl,
+            analysisOllamaModel,
+            currentSegment
+          );
+          currentRes = analysisResult.parsed;
+          rawText = analysisResult.text;
+        } else if (analysisEngine === "gpt" || analysisEngine === "doubao") {
+          const { analyzeScriptWithOtherLLM } = await import("./services/gemini");
+          const key = analysisEngine === "gpt" ? apiKeys.gpt : apiKeys.doubao;
+          currentRes = await analyzeScriptWithOtherLLM(
+            currentSegment,
+            analysisEngine as any,
+            key
+          );
         } else {
-          setRawAnalysisText(analysisResult.text);
-          setResults(null);
+          // Gemini
+          currentRes = await analyzeScript(
+            currentSegment,
+            referenceImages.map((img) => img.url),
+            apiKeys.gemini
+          );
         }
-      } else if (analysisEngine === "gpt" || analysisEngine === "doubao") {
-        const { analyzeScriptWithOtherLLM } = await import("./services/gemini");
-        const key = analysisEngine === "gpt" ? apiKeys.gpt : apiKeys.doubao;
-        res = await analyzeScriptWithOtherLLM(
-          scriptToAnalyze,
-          analysisEngine as any,
-          key,
-        );
-        setResults(res);
-      } else {
-        res = await analyzeScript(
-          scriptToAnalyze,
-          referenceImages.map((img) => img.url),
-          apiKeys.gemini,
-        );
-        setResults(res);
+
+        if (currentRes) {
+          // 合并 storyboard
+          combinedResults.storyboard = [...combinedResults.storyboard, ...currentRes.storyboard];
+          
+          // 去重合并 characters
+          const charNames = new Set(combinedResults.characters.map(c => c.name));
+          currentRes.characters.forEach(c => {
+            if (!charNames.has(c.name)) combinedResults.characters.push(c);
+          });
+
+          // 去重合并 scenes
+          const sceneNames = new Set(combinedResults.scenes.map(s => s.name));
+          currentRes.scenes.forEach(s => {
+            if (!sceneNames.has(s.name)) combinedResults.scenes.push(s);
+          });
+
+          // 去重合并 props
+          const propNames = new Set(combinedResults.props.map(p => p.name));
+          currentRes.props.forEach(p => {
+            if (!propNames.has(p.name)) combinedResults.props.push(p);
+          });
+
+          // 重新整理帧编号
+          combinedResults.storyboard = combinedResults.storyboard.map((f, idx) => ({
+            ...f,
+            frameNumber: idx + 1
+          }));
+
+          // 实时展示部分结果
+          setResults({ ...combinedResults });
+        } else if (rawText) {
+          setRawAnalysisText(prev => prev + "\n" + rawText);
+        }
       }
-      setActiveTab("analysis");
+
+      if (combinedResults.storyboard.length > 0) {
+        setResults(combinedResults);
+        setActiveTab("storyboard");
+      }
     } catch (error: any) {
       console.error("Analysis failed", error);
       const errorMsg = JSON.stringify(error) + String(error);
       if (errorMsg.includes("429")) {
-        alert(
-          "额度受限 (429): 当前分析模型的免费额度已耗尽。请配置有效 API Key。",
-        );
+        alert("额度受限 (429): 当前分析模型的免费额度已耗尽。请配置有效 API Key。");
       } else if (errorMsg.includes("403")) {
         alert("权限不足 (403): 请检查 API Key。");
       } else {
-        alert(
-          `智能剧本分析失败: \n${error?.message || "未知错误，请检查网络或配置"}`,
-        );
+        alert(`智能剧本分析失败: \n${error?.message || "未知错误，请检查网络或配置"}`);
       }
     } finally {
       setIsAnalyzing(false);
+      setGenStatus("");
     }
   };
 
@@ -1441,17 +1574,24 @@ export default function App() {
         .replace(/^[\s\S]*?(?:画面|视觉|内容)[:：]/i, "")
         .trim();
 
-      let audioVoiceover = "";
+      let narration = "";
       const audioMatch = descChunk.match(
-        /(?:声音|旁白|台词|VO)[:：]\s*([^\n]+)/i,
+        /(?:声音|旁白|对白|台词|VO)[:：]\s*([^\n]+)/i,
       );
-      if (audioMatch) audioVoiceover = audioMatch[1];
+      if (audioMatch) narration = audioMatch[1];
+      
+      let subtitles = "";
+      const subtitleMatch = descChunk.match(
+        /(?:字幕|花字|SUPER)[:：]\s*([^\n]+)/i,
+      );
+      if (subtitleMatch) subtitles = subtitleMatch[1];
 
       result.storyboard.push({
         frameNumber: frameNumber,
         visualDescription:
           visualDesc || descChunk.split("\n")[0] || "自动提取画面",
-        audioVoiceover: audioVoiceover,
+        narration: narration,
+        subtitles: subtitles,
         composition: "自动分析构图",
       });
     }
@@ -1465,7 +1605,8 @@ export default function App() {
         result.storyboard.push({
           frameNumber: idx + 1,
           visualDescription: chunk.trim(),
-          audioVoiceover: "",
+          narration: "",
+          subtitles: "",
           composition: "智能构图",
         });
       });
@@ -1475,7 +1616,8 @@ export default function App() {
       result.storyboard.push({
         frameNumber: 1,
         visualDescription: rawAnalysisText.substring(0, 500),
-        audioVoiceover: "",
+        narration: "",
+        subtitles: "",
         composition: "",
       });
     }
@@ -1739,14 +1881,16 @@ export default function App() {
       <header className="h-[56px] bg-[var(--surface)] border-b border-[var(--border)] px-5 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-3">
           <div className="text-[var(--accent)] font-extrabold tracking-wider text-base uppercase">
-            HACKBUTEER AGAINT <span className="font-light opacity-60">PRO</span>
+            火枪手智能分镜大师 <span className="font-light opacity-60">PRO</span>
           </div>
         </div>
 
         <div className="flex items-center gap-4">
-          <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-tight font-bold">
-            Powered By DevaHoo
+          <div className="font-mono text-[10px] text-[var(--accent)] uppercase tracking-tight font-bold flex items-center gap-2">
+            <span>Powered By DevaHoo</span>
+            <span className="text-[var(--text-dim)] pl-2 border-l border-[var(--border)]">v2.0.6</span>
           </div>
+
           <div className="flex bg-[var(--bg)] p-1 rounded border border-[var(--border)]">
             <TabButton
               active={activeTab === "analysis"}
@@ -1979,11 +2123,14 @@ export default function App() {
 
               <button
                 onClick={() => onAnalyze()}
-                disabled={isAnalyzing || (!script.trim() && !uploadedScriptFile?.text.trim())}
-                className="w-full py-3 bg-[var(--accent)] text-black rounded font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-4 shadow-[0_0_15px_rgba(205,255,0,0.15)]"
+                disabled={isAnalyzing || (!script.trim() && !uploadedScriptFile?.file)}
+                className="w-full py-3 bg-[var(--accent)] text-black rounded font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-4 shadow-[0_0_15px_rgba(205,255,0,0.15)] flex justify-center items-center gap-2"
               >
                 {isAnalyzing ? (
-                  <Loader2 className="w-5 h-5 animate-spin mx-auto" />
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>{genStatus || "AI 分析中..."}</span>
+                  </>
                 ) : (
                   "开始智能分析"
                 )}
@@ -2146,7 +2293,6 @@ export default function App() {
                             完整 Workflow (API JSON)
                           </label>
                           <div className="flex items-center gap-2">
-                            {localWorkflows.length > 0 && (
                               <select
                                 onChange={(e) => handleSelectLocalWorkflow(e.target.value)}
                                 className="text-[10px] bg-[#111] border border-[var(--border)] rounded px-2 py-1 text-[var(--accent)] outline-none hover:border-[var(--accent)] transition-colors max-w-[120px] overflow-hidden text-ellipsis whitespace-nowrap"
@@ -2158,7 +2304,6 @@ export default function App() {
                                   </option>
                                 ))}
                               </select>
-                            )}
                             <label className="text-[10px] bg-[#111] hover:bg-[var(--accent)] hover:text-black transition-colors border border-[var(--border)] rounded px-2 py-1 cursor-pointer text-[var(--accent)] font-bold">
                               加载文件...
                               <input
@@ -2484,7 +2629,7 @@ export default function App() {
                   localWorkflows={localWorkflows}
                 />
               </motion.div>
-            ) : !results && !rawAnalysisText ? (
+            ) : isAnalyzing || (!results && !rawAnalysisText) ? (
               <motion.div
                 key="empty"
                 initial={{ opacity: 0 }}
@@ -2494,9 +2639,9 @@ export default function App() {
                 {isAnalyzing ? (
                   <div className="w-64 max-w-full">
                     <div className="flex justify-between items-end mb-2">
-                      <span className="text-sm font-bold text-[var(--accent)] uppercase tracking-widest flex items-center gap-2">
+                      <span className="text-sm font-bold text-[var(--accent)] uppercase flex items-center gap-2">
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        AI 深度拆解中
+                        {genStatus || "AI 深度拆解中"}
                       </span>
                       <span className="text-xs font-mono text-[var(--text-dim)]">
                         {analysisProgress}%

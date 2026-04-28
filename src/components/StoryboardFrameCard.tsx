@@ -205,7 +205,7 @@ export function StoryboardFrameCard({
         </div>
         <div className="flex gap-1 items-center flex-shrink-0 pt-1.5 border-t border-white/5">
           <Badge text="旁白" />
-          <p className="text-[10px] text-[var(--text-dim)] italic truncate" title={frame.audioVoiceover}>{frame.audioVoiceover}</p>
+          <p className="text-[10px] text-[var(--text-dim)] italic truncate" title={frame.narration}>{frame.narration}</p>
         </div>
       </div>
     </div>

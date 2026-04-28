@@ -44,7 +44,6 @@ export interface ReferenceImage {
 export interface StoryboardFrame {
   frameNumber: number;
   visualDescription: string;
-  audioVoiceover: string;
   composition: string;
   shotType?: string;      // 景别
   angle?: string;         // 角度
@@ -243,21 +242,31 @@ export async function analyzeScript(script: string, referenceImages?: string[], 
   
   const contentParts: any[] = [
     { text: `
-      你是一位专业的导演和分镜师。
-      请分析以下故事梗概/剧本，提取角色、场景、道具，并生成一个专业的分镜矩阵。
+      你是一位专业的导演和分镜师。本系统已将长剧本切割为数个片段，请分析当前给到的剧本片段，提取角色、场景、道具，并生成一个专业的分镜矩阵。
       
-      特别指令：
+      【特别指令】
       1. 所有的输出内容必须使用【中文】。
-      2. 不要 1:1 地将一句 VO 映射到一个画面。
-      3. 【重要】如果一段描述中出现了不同的场景/地点，必须强制拆分为不同的分镜帧。一个分镜提示词内不得出现两个及以上场景的描述。
-      4. 电影感节奏：使用多样的构图（特写、全景、过肩、倾斜镜头、第一人称视角等）。
-      5. 视觉一致性：分析结果中角色、场景、道具等全局性提示词必须智能划分并写入到相应分镜的视觉描述 (visualDescription) 中，以确保一致性。
-      6. 【重要格式】：每一帧的分镜视觉描述（visualDescription）开头必须智能添加【景别、镜头、画面风格】，并用逗号隔开。此要求严禁省略。
-      7. 【新增字段】：为每个分镜提取出纯粹的景别 (shotType, 如特写/全景) 和镜头运动 (cameraMovement, 如摇镜头/固定)。
-      8. 【声音与字幕】：将剧本中的 VO、旁白、对白内容准确识别并填入 narration 字段。将剧本中出现的 Super、花字、字幕内容准确识别并填入 subtitles 字段。【严格要求】：如果剧本中在当前分镜没有对应的旁白或字幕内容，请在该字段中返回空字符串 ""，绝对不要把画面视觉描述填充到旁白或字幕列中。
-      9. 【视频提示词】：根据视觉描述，生成一段专业的“图生视频提示词”(videoPrompt)，描述画面中的动态趋势、镜头轨迹或微表情变化。
-      10. 动态数量：根据画面视觉复杂度决定分镜数量。      
-      剧本内容：${script}
+      2. 电影感节奏：使用多样的构图（特写、全景、过肩、倾斜镜头、第一人称视角等）。
+      3. 【极其关键】：请不要漏掉原脚本的任何文本。所有的配音、人物说话、旁白等都必须原封不动地提出来，填入 narration 或 subtitles 中。
+      4. 视觉一致性：分析结果中角色、场景、道具等全局性提示词必须写入到相应分镜的视觉描述 (visualDescription) 中。
+      
+      【重要格式】
+      5. 每一帧的分镜视觉描述（visualDescription）开头必须自带【景别、镜头、画面风格】，并用逗号隔开。此要求严禁省略。
+      6. 为每个分镜提取出纯粹的景别 (shotType, 如特写/中景/全景) 和镜头运动 (cameraMovement, 如摇镜头/固定/推拉)。
+      
+      【声音与字幕（核心要求）】
+      7. 你必须严格执行视觉与听觉的彻底隔离。
+         - **narration (旁白与对白)**：提取剧本中角色说出的话、配音或解说词文本。这是最重要的音频输入，必须原封不动提取具体要被读出的句子！
+         - **subtitles (字幕与花字)**：提取剧本中标注为屏幕表现文字、字幕、花字的内容。
+         - **严禁使用占位符**：绝对禁止在这两个字段中填写“旁白/对白”、“字幕内容”这样敷衍的表头占位符。只要没有具体台词，必须留空 ""。只要有台词，必须一字不差填进来！不要混入任何视觉动作描写指令。
+         
+      【极限拆分策略（突破字数限制）】
+      8. 如果一段描述中出现不同场景、时间流逝、复杂动作或人物对话推进，必须强制拆分为极多帧不同的分镜！
+      9. 不要对剧情进行大幅跳跃或概括。针对每一个极其细微的动作变化、神态转换或换气停顿都生成独立分镜。如果文案信息量大，这几百字可能会拆出 10~20+ 个分镜。分镜数量必须足够多，必须铺满整个文案内容！
+      10. 【图生视频提示词】：根据 visualDescription 生成英文或中文的 videoPrompt，精确描写动态变化趋势。
+
+      当前要拆解的剧本内容：
+      ${script}
     `.trim() }
   ];
 
@@ -326,7 +335,6 @@ export async function analyzeScript(script: string, referenceImages?: string[], 
                 properties: {
                   frameNumber: { type: Type.INTEGER },
                   visualDescription: { type: Type.STRING },
-                  audioVoiceover: { type: Type.STRING },
                   composition: { type: Type.STRING },
                   shotType: { type: Type.STRING },
                   cameraMovement: { type: Type.STRING },
@@ -334,7 +342,7 @@ export async function analyzeScript(script: string, referenceImages?: string[], 
                   subtitles: { type: Type.STRING },
                   videoPrompt: { type: Type.STRING },
                 },
-                required: ["frameNumber", "visualDescription", "audioVoiceover", "composition", "shotType", "cameraMovement", "narration", "subtitles", "videoPrompt"],
+                required: ["frameNumber", "visualDescription", "composition", "shotType", "cameraMovement", "narration", "subtitles", "videoPrompt"],
               },
             },
           },
@@ -373,26 +381,38 @@ export async function analyzeOllamaScript(
 ): Promise<{ text: string, parsed: AnalysisResult | null }> {
   try {
     const prompt = `
-你是一位专业的导演和分镜师。
-请分析以下故事梗概/剧本，提取角色、场景、道具，并生成一个专业的分镜矩阵。
+你是一位专业的导演和分镜师。本系统已将长剧本切割为数个片段，请分析当前给到的剧本片段，提取角色、场景、道具，并生成一个专业的分镜矩阵。
 
-特别指令：
+【特别指令】
 1. 所有的输出内容必须使用【中文】。
-2. 不要 1:1 地将一句 VO 映射到一个画面，要细分节奏使用多样的电影构图。
-3. 【强制拆分场景】：如果一段描述中出现了不同的场景或地点，必须将其拆分为对应的多个分镜帧。一个分镜提示词内【绝对不得】出现两个及以上场景的描述。
-4. 视觉一致性：分析结果中角色、场景、道具等全局性提示词必须智能划分并写入到相应分镜的视觉描述 (visualDescription) 中，以确保一致性。
-5. 【重要格式】：每一帧的分镜视觉描述（visualDescription）开头必须智能添加【景别、镜头、画面风格】，并用逗号隔开。此要求严禁省略。
-6. 【声音与字幕】：将剧本中的 VO、旁白、对白内容准确识别并填入 narration 字段。将剧本中出现的 Super、花字、字幕内容准确识别并填入 subtitles 字段。【严格要求】：如果该分镜没有对应的声音或字幕内容，请保持该字段为空字符串 ""，不得填充任何视觉描述。
-7. 【视频提示词】：根据视觉描述，生成一段专业的“图生视频提示词”(videoPrompt)，描述画面中的动态趋势、镜头轨迹或微表情变化。
-8. 【重要】你的输出必须且只能为纯粹的JSON（不要用Markdown格式），完全匹配以下结构：
+2. 电影感节奏：使用多样的构图（特写、全景、过肩、倾斜镜头、第一人称视角等）。
+3. 【极其关键】：请不要漏掉原脚本的任何文本。所有的配音、人物说话、旁白等都必须原封不动地提出来，填入 narration 或 subtitles 中。
+4. 视觉一致性：随角色、场景、道具等全局性提示词必须写入到相应分镜的视觉描述 (visualDescription) 中。
+
+【重要格式】
+5. 每一帧的视觉描述（visualDescription）开头必须自带【景别、镜头、画面风格】，并用逗号隔开。此要求严禁省略。
+6. 分别提取纯粹的景别 (shotType) 和镜头运动 (cameraMovement)。
+
+【声音与字幕（核心要求）】
+7. 必须绝对隔离视觉和听觉。
+   - **narration**: 提取剧本中角色说出的话、配音或解说词文本。一字不差提取具体要被读出的句子！
+   - **subtitles**: 提取剧本中标注为屏幕表现文字、字幕、花字的内容。
+   - **严禁使用表头占位符**：绝对不要在这两个字段填写“旁白/对白”或“字幕内容”。只要没台词，必须留空 ""。如果有台词，必须一字不差填进来！
+
+【极限拆分策略（突破字数限制）】
+8. 如果一段描述中出现不同场景、复杂动作或时间流逝，必须强制拆分为极多帧独立分镜！
+9. 严禁概括剧情。针对每一个细微动作变化或对话推进都生成独立分镜。如果文案信息量大，几句话就拆出10+个分镜。分镜数量必须铺满整个文案！
+10. 【图生视频提示词】：生成 videoPrompt，精确描写动态。
+
+【重要】你的输出必须且只能为纯粹的JSON（不要用Markdown格式），完全匹配以下结构：
 {
   "characters": [{ "name": "...", "description": "...", "clothing": "...", "makeup": "..." }],
   "props": [{ "name": "...", "description": "...", "usage": "..." }],
   "scenes": [{ "name": "...", "setting": "...", "lighting": "...", "atmosphere": "...", "shotType": "...", "cameraMovement": "..." }],
-  "storyboard": [{ "frameNumber": 1, "visualDescription": "...", "audioVoiceover": "...", "composition": "...", "shotType": "...", "cameraMovement": "...", "narration": "...", "subtitles": "...", "videoPrompt": "..." }]
+  "storyboard": [{ "frameNumber": 1, "visualDescription": "...", "composition": "...", "shotType": "...", "cameraMovement": "...", "narration": "...", "subtitles": "...", "videoPrompt": "..." }]
 }
 
-剧本内容：
+当前要拆解的剧本片段：
 ${script}
 `.trim();
 
@@ -403,6 +423,11 @@ ${script}
         model: modelName,
         prompt: prompt,
         stream: false,
+        format: "json",
+        options: {
+          num_ctx: 16384,
+          temperature: 0.7,
+        }
       }),
     });
 
@@ -651,19 +676,33 @@ export async function analyzeScriptWithOtherLLM(
   apiKey: string
 ): Promise<AnalysisResult> {
   const prompt = `
-    你是一位专业的导演和分镜师。
-    请分析以下故事梗概/剧本，提取角色、场景、道具，并生成一个专业的分镜矩阵。
-    
-    特别指令：
-    1. 所有的输出内容必须使用【中文】。
-    2. 【重要格式】：输出必须为纯粹的 JSON 格式，包含 characters, scenes, props, storyboard 四个数组。
-    3. storyboard 中每一帧视觉描述（visualDescription）开头必须包含景别、镜头、画面风格。
-    4. 【声音与字幕】：将剧本中的 VO、旁白、对白内容准确识别并填入 narration 字段。将剧本中出现的 Super、花字、字幕内容准确识别并填入 subtitles 字段。【严格要求】：若无对应内容请保持对应字段为空 ""，切勿将画面视觉描述填入。
-    5. 【视频提示词】：根据视觉描述，为每一帧生成一段专业的“图生视频提示词”(videoPrompt)，描述画面中的动态趋势（如：镜头缓慢推近、烟雾缭绕、人物眨眼等）。
-    
-    剧本内容：${script}
-    
-    请严格返回符合以下结构的 JSON 字符串 (不要包含 md 代码块标识):
+你是一位专业的导演和分镜师。本系统已将长剧本切割为数个片段，请分析当前给到的剧本片段，提取角色、场景、道具，并生成一个专业的分镜矩阵。
+
+【特别指令】
+1. 所有的输出内容必须使用【中文】。
+2. 电影感节奏：使用多样的构图（特写、全景、过肩、倾斜镜头、第一人称视角等）。
+3. 【极其关键】：请不要漏掉原脚本的任何文本。所有的配音、人物说话、旁白等都必须原封不动地提出来，填入 narration 或 subtitles 中。
+4. 视觉一致性：随角色、场景、道具等全局性提示词必须写入到相应分镜的视觉描述 (visualDescription) 中。
+
+【重要格式】
+5. 每一帧的视觉描述（visualDescription）开头必须自带【景别、镜头、画面风格】，并用逗号隔开。此要求严禁省略。
+6. 分别提取纯粹的景别 (shotType) 和镜头运动 (cameraMovement)。
+
+【声音与字幕（核心要求）】
+7. 必须绝对隔离视觉和听觉。
+   - **narration**: 提取剧本中角色说出的话、配音或解说词文本。一字不差提取具体要被读出的句子！
+   - **subtitles**: 提取剧本中标注为屏幕表现文字、字幕、花字的内容。
+   - **严禁使用表头占位符**：绝对不要在这两个字段填写“旁白/对白”或“字幕内容”。只要没台词，必须留空 ""。如果有台词，必须一字不差填进来！
+
+【极限拆分策略（突破字数限制）】
+8. 如果一段描述中出现不同场景、复杂动作或时间流逝，必须强制拆分为极多帧独立分镜！
+9. 严禁概括剧情。针对每一个细微动作变化或对话推进都生成独立分镜。如果文案信息量大，几句话就拆出10+个分镜。分镜数量必须铺满整个文案！
+10. 【图生视频提示词】：生成 videoPrompt，精确描写动态。
+
+当前要拆解的剧本片段：
+${script}
+
+请严格返回符合以下结构的 JSON 字符串 (不要包含 md 代码块标识):
     {
       "characters": [],
       "scenes": [],
@@ -672,7 +711,6 @@ export async function analyzeScriptWithOtherLLM(
         {
           "frameNumber": 1,
           "visualDescription": "...",
-          "audioVoiceover": "...",
           "composition": "...",
           "shotType": "...",
           "cameraMovement": "...",

@@ -1,60 +1,61 @@
 {
-  "name": "scriptwise-ai",
-  "productName": "ScriptwiseAI",
-  "version": "1.0.0",
-  "description": "火枪手超级分镜大师 PRO - AI 驱动的影视制作辅助系统",
-  "main": "main.cjs",
+  "name": "hackscriptai",
+  "private": true,
+  "version": "2.0.6",
   "type": "module",
-  "author": "DevaHoo",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "clean": "rm -rf dist release",
-    "lint": "tsc --noEmit",
-    "dist": "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ npx electron-builder --mac --arm64 --dir"
-  },
+  "main": "main.cjs",
   "build": {
-    "appId": "com.devahoo.scriptwiseai",
-    "productName": "ScriptwiseAI",
-    "copyright": "Copyright © 2026 DevaHoo",
+    "appId": "com.aistudio.comfyui.assistant",
+    "productName": "HackScriptAI",
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
-      "main.cjs",
-      "package.json",
-      "WorkFlowSample/**/*"
+      "main.cjs"
     ],
     "extraResources": [
       {
-        "from": "public/icon.icns",
-        "to": "resources/icon.icns"
+        "from": "WorkFlowSample",
+        "to": "WorkFlowSample",
+        "filter": ["**/*"]
+      },
+      {
+        "from": ".",
+        "to": ".",
+        "filter": [
+          "Start.command",
+          "Start_Win.bat"
+        ]
       }
     ],
     "mac": {
       "target": [
-        "dir"
+        "dmg"
       ],
-      "category": "public.app-category.video",
       "icon": "public/icon.icns"
     },
-    "dmg": {
-      "contents": [
-        {
-          "x": 410,
-          "y": 150,
-          "type": "link",
-          "path": "/Applications"
-        },
-        {
-          "x": 130,
-          "y": 150,
-          "type": "file"
-        }
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
       ]
     }
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rm -rf dist",
+    "lint": "tsc --noEmit",
+    "electron:start": "NODE_ENV=development electron .",
+    "electron:pack": "npm run build && electron-builder",
+    "postinstall": "node -e \"require('fs').chmodSync('Start.command', '755'); require('fs').chmodSync('Build_Mac.command', '755')\" || true"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -79,8 +80,8 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
-    "electron": "^30.0.0",
-    "electron-builder": "^24.13.3",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
