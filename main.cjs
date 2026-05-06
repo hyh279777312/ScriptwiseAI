@@ -1,8 +1,10 @@
 const { app, BrowserWindow, Menu, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const express = require('express');
 
 let mainWindow;
+let serverInstance;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -10,8 +12,7 @@ function createWindow() {
     height: 900,
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false,
-      webSecurity: false // allow local files loading local files directly if needed
+      contextIsolation: false
     },
     autoHideMenuBar: true
   });
@@ -23,11 +24,45 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
+    // Start local express server to avoid file:// protocol issues with Firebase Auth
+    if (!serverInstance) {
+      const serverApp = express();
+      const distPath = path.join(__dirname, 'dist');
+      serverApp.use(express.static(distPath));
+      serverApp.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+      serverInstance = serverApp.listen(3000, '0.0.0.0', () => {
+        mainWindow.loadURL(`http://localhost:3000`);
+      }).on('error', (e) => {
+        // Fallback to random port if 3000 is in use
+        serverInstance = serverApp.listen(0, '0.0.0.0', () => {
+          const port = serverInstance.address().port;
+          mainWindow.loadURL(`http://localhost:${port}`);
+        });
+      });
+    } else {
+      const port = serverInstance.address().port;
+      mainWindow.loadURL(`http://localhost:${port}`);
+    }
   }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // Handle popups correctly for Firebase Auth
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          webSecurity: true
+        }
+      }
+    };
   });
 }
 
@@ -42,6 +77,9 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  if (serverInstance) {
+    serverInstance.close();
+  }
   if (process.platform !== 'darwin') {
     app.quit();
   }

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { onAuthStateChanged, User as FirebaseUser } from "firebase/auth";
 import { auth, logout } from "./services/firebase";
 import {
@@ -63,6 +63,8 @@ export default function App() {
   const [isDraggingScript, setIsDraggingScript] = useState(false);
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const cancelAnalysisRef = useRef(false);
+  const cancelAnalysisControllerRef = useRef<AbortController | null>(null);
   const [results, setResults] = useState<AnalysisResult | null>(null);
   const [frameImages, setFrameImages] = useState<Record<number, string>>({});
   const [activeTab, setActiveTab] = useState<"analysis" | "storyboard" | "image-tools">(
@@ -100,12 +102,41 @@ export default function App() {
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [metaImages, setMetaImages] = useState<Record<string, string>>({});
   const [tablePadding, setTablePadding] = useState(8);
+  const [mergedCells, setMergedCells] = useState<Record<string, { rowSpan: number, colSpan: number }>>({});
+  
   const [tableLineHeight, setTableLineHeight] = useState(1.5);
   const [tableFontSize, setTableFontSize] = useState(12);
   const [characterCols, setCharacterCols] = useState<string[]>([]);
   const [sceneCols, setSceneCols] = useState<string[]>([]);
   const [propCols, setPropCols] = useState<string[]>([]);
   const [storyboardCols, setStoryboardCols] = useState<string[]>([]);
+  
+  const hiddenCells = useMemo(() => {
+    const hidden = new Set<string>();
+    Object.entries(mergedCells).forEach(([key, { rowSpan, colSpan }]) => {
+      const parts = key.split('_');
+      if (parts.length < 2) return;
+      const startRow = parseInt(parts[0], 10);
+      const startCol = parts.slice(1).join('_'); // assuming mostly index, shot, narration etc., but dealing with potential underscores
+      
+      const colOrder = ['index', 'shot', 'narration', 'subtitles', 'visual', ...storyboardCols, 'actions', 'preview', 'videoPrompt'];
+      const startColIdx = colOrder.indexOf(startCol);
+      if (startColIdx === -1) return;
+
+      for (let r = 0; r < rowSpan; r++) {
+        for (let c = 0; c < colSpan; c++) {
+          if (r === 0 && c === 0) continue; // the parent cell
+          hidden.add(`${startRow + r}_${colOrder[startColIdx + c]}`);
+        }
+      }
+    });
+    return hidden;
+  }, [mergedCells, storyboardCols]);
+
+  const [selection, setSelection] = useState<{ type: string, startRow: number, startCol: string, endRow: number, endCol: string } | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ type: "storyboard" | "character" | "scene" | "prop", x: number, y: number, row: number, col: string, visible: boolean } | null>(null);
+
   const [projectName, setProjectName] = useState("未命名工程");
   const [fileHandle, setFileHandle] = useState<any>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -381,15 +412,25 @@ export default function App() {
     const handleMouseUp = () => {
       setResizingCol(null);
       setResizingRow(null);
+      setIsSelecting(false);
+    };
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest && target.closest('.storyboard-context-menu')) return;
+      setContextMenu(null);
     };
 
     if (resizingCol || resizingRow) {
       window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
     }
+    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('click', handleClickOutside);
+    
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('click', handleClickOutside);
     };
   }, [resizingCol, resizingRow]);
 
@@ -529,6 +570,7 @@ export default function App() {
       } else if (
         selectedEngine === "jimeng" ||
         selectedEngine === "kling" ||
+        selectedEngine === "doubao" ||
         selectedEngine === "mj"
       ) {
         const { generateWithOtherImageEngine } =
@@ -1011,19 +1053,34 @@ export default function App() {
     type: "character" | "scene" | "prop" | "storyboard",
     colName: string,
   ) => {
-    if (type === "character")
+    const predefinedCharacter = ['name', 'description', 'clothing', 'makeup', 'actions', 'preview'];
+    const predefinedScene = ['name', 'setting', 'lighting', 'atmosphere', 'actions', 'preview'];
+    const predefinedProp = ['name', 'description', 'usage', 'actions', 'preview'];
+    const predefinedStoryboard = ['index', 'shot', 'narration', 'subtitles', 'visual', 'actions', 'preview', 'videoPrompt'];
+
+    if (type === "character") {
+      if (predefinedCharacter.includes(colName)) return alert("默认系统列无法删除");
       setCharacterCols(characterCols.filter((c) => c !== colName));
-    if (type === "scene") setSceneCols(sceneCols.filter((c) => c !== colName));
-    if (type === "prop") setPropCols(propCols.filter((c) => c !== colName));
-    if (type === "storyboard")
+    }
+    if (type === "scene") {
+      if (predefinedScene.includes(colName)) return alert("默认系统列无法删除");
+      setSceneCols(sceneCols.filter((c) => c !== colName));
+    }
+    if (type === "prop") {
+      if (predefinedProp.includes(colName)) return alert("默认系统列无法删除");
+      setPropCols(propCols.filter((c) => c !== colName));
+    }
+    if (type === "storyboard") {
+      if (predefinedStoryboard.includes(colName)) return alert("默认系统列无法删除");
       setStoryboardCols(storyboardCols.filter((c) => c !== colName));
+    }
   };
 
   // Project Management States
 
   // Analysis Engine configurations
   const [analysisOllamaModel, setAnalysisOllamaModel] =
-    useState("qwen3-coder:30b");
+    useState("gemma4:31b");
 
   // Image Generation Engine configurations
 
@@ -1053,6 +1110,7 @@ export default function App() {
     samplingSteps,
     metaImages,
     tablePadding,
+    mergedCells,
     tableLineHeight,
     tableFontSize,
     characterCols,
@@ -1095,6 +1153,7 @@ export default function App() {
     if (data.samplingSteps !== undefined) setSamplingSteps(data.samplingSteps);
     if (data.metaImages !== undefined) setMetaImages(data.metaImages);
     if (data.tablePadding !== undefined) setTablePadding(data.tablePadding);
+    if (data.mergedCells !== undefined) setMergedCells(data.mergedCells);
     if (data.tableLineHeight !== undefined)
       setTableLineHeight(data.tableLineHeight);
     if (data.tableFontSize !== undefined) setTableFontSize(data.tableFontSize);
@@ -1419,13 +1478,13 @@ export default function App() {
 
     if (!scriptToAnalyze.trim()) return;
 
-    // 分段处理逻辑 (每段约 2000 字)
-    const CHUNK_SIZE = 2000;
+    // 分段处理逻辑
+    const CHUNK_SIZE = 1000;
     const segments: string[] = [];
-    if (scriptToAnalyze.length > CHUNK_SIZE + 400) {
+    if (scriptToAnalyze.length > CHUNK_SIZE + 200) {
       let remaining = scriptToAnalyze;
       while (remaining.length > 0) {
-        if (remaining.length <= CHUNK_SIZE + 400) {
+        if (remaining.length <= CHUNK_SIZE + 200) {
           segments.push(remaining);
           break;
         }
@@ -1439,6 +1498,8 @@ export default function App() {
     }
 
     setIsAnalyzing(true);
+    cancelAnalysisRef.current = false;
+    cancelAnalysisControllerRef.current = new AbortController();
     setRawAnalysisText("");
     setResults(null); 
     setGenStatus("正在初始化分析...");
@@ -1452,6 +1513,10 @@ export default function App() {
       };
 
       for (let i = 0; i < segments.length; i++) {
+        if (cancelAnalysisRef.current) {
+          setGenStatus("分析已被中断");
+          break;
+        }
         const progressMessage = segments.length > 1 
           ? `正在分析第 ${i + 1}/${segments.length} 段脚本...` 
           : "正在深度解析脚本内容...";
@@ -1466,7 +1531,8 @@ export default function App() {
           const analysisResult = await analyzeOllamaScript(
             analysisOllamaUrl,
             analysisOllamaModel,
-            currentSegment
+            currentSegment,
+            cancelAnalysisControllerRef.current.signal
           );
           currentRes = analysisResult.parsed;
           rawText = analysisResult.text;
@@ -1476,14 +1542,16 @@ export default function App() {
           currentRes = await analyzeScriptWithOtherLLM(
             currentSegment,
             analysisEngine as any,
-            key
+            key,
+            cancelAnalysisControllerRef.current.signal
           );
         } else {
           // Gemini
           currentRes = await analyzeScript(
             currentSegment,
             referenceImages.map((img) => img.url),
-            apiKeys.gemini
+            apiKeys.gemini,
+            cancelAnalysisControllerRef.current.signal
           );
         }
 
@@ -1517,6 +1585,9 @@ export default function App() {
 
           // 实时展示部分结果
           setResults({ ...combinedResults });
+          if (combinedResults.storyboard.length > 0) {
+            setActiveTab("storyboard");
+          }
         } else if (rawText) {
           setRawAnalysisText(prev => prev + "\n" + rawText);
         }
@@ -1527,6 +1598,10 @@ export default function App() {
         setActiveTab("storyboard");
       }
     } catch (error: any) {
+      if (error.name === 'AbortError' || cancelAnalysisRef.current) {
+        console.log("Analysis aborted by user.");
+        return; // silently exit since the user cancelled
+      }
       console.error("Analysis failed", error);
       const errorMsg = JSON.stringify(error) + String(error);
       if (errorMsg.includes("429")) {
@@ -1539,6 +1614,11 @@ export default function App() {
     } finally {
       setIsAnalyzing(false);
       setGenStatus("");
+      if (analysisEngine === "ollama") {
+        import("./services/gemini").then(({ unloadOllamaModel }) => {
+          unloadOllamaModel(analysisOllamaUrl, analysisOllamaModel).catch(console.error);
+        });
+      }
     }
   };
 
@@ -1742,6 +1822,7 @@ export default function App() {
           } else if (
             selectedEngine === "jimeng" ||
             selectedEngine === "kling" ||
+            selectedEngine === "doubao" ||
             selectedEngine === "mj"
           ) {
             const { generateWithOtherImageEngine } =
@@ -1751,7 +1832,9 @@ export default function App() {
                 ? apiKeys.jimeng
                 : selectedEngine === "kling"
                   ? apiKeys.kling
-                  : apiKeys.mj;
+                  : selectedEngine === "doubao"
+                    ? apiKeys.doubao
+                    : apiKeys.mj;
             url = await generateWithOtherImageEngine(
               buildPromptWithLayout(frame.visualDescription, frame),
               selectedEngine,
@@ -1840,6 +1923,7 @@ export default function App() {
       if (
         selectedEngine === "jimeng" ||
         selectedEngine === "kling" ||
+        selectedEngine === "doubao" ||
         selectedEngine === "mj"
       ) {
         const { generateWithOtherImageEngine } =
@@ -1873,6 +1957,136 @@ export default function App() {
       setIsGridExporting(false);
       setGenStatus("");
     }
+  };
+
+  const handleCopy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      try {
+        document.execCommand('copy');
+      } catch (e) {
+        console.error(e);
+      }
+      textArea.remove();
+    }
+  };
+
+  const getCellContent = (type: string, row: number, col: string) => {
+    let frame = null;
+    if (type === 'storyboard') frame = results?.storyboard[row] as any;
+    else if (type === 'character') frame = results?.characters[row] as any;
+    else if (type === 'scene') frame = results?.scenes[row] as any;
+    else if (type === 'prop') frame = results?.props[row] as any;
+    
+    if (!frame) return '';
+    if (type === 'storyboard') {
+      if (col === 'visual') return frame.visualDescription || '';
+      if (col === 'shot') return `${frame.shotType || ''} ${frame.angle || ''}`.trim();
+    }
+    return frame[col] || '';
+  };
+
+  const setCellContent = (type: string, row: number, col: string, text: string) => {
+    if (!results) return;
+    
+    const updateResults = (newArr: any[], key: string) => {
+      setResults({ ...results, [key]: newArr });
+    };
+
+    if (type === 'storyboard') {
+      const newSb = [...results.storyboard];
+      const frame = newSb[row] as any;
+      if (col === 'visual') {
+        frame.visualDescription = text;
+      } else if (col === 'shot') {
+        frame.shotType = text; 
+        frame.angle = "";
+      } else {
+        frame[col] = text;
+      }
+      updateResults(newSb, 'storyboard');
+    } else if (type === 'character') {
+      const newArr = [...results.characters];
+      newArr[row][col] = text;
+      updateResults(newArr, 'characters');
+    } else if (type === 'scene') {
+      const newArr = [...results.scenes];
+      newArr[row][col] = text;
+      updateResults(newArr, 'scenes');
+    } else if (type === 'prop') {
+      const newArr = [...results.props];
+      newArr[row][col] = text;
+      updateResults(newArr, 'props');
+    }
+  };
+
+  const getTableColOrder = (type: string) => {
+    if (type === 'character') return ['name', 'description', 'clothing', 'makeup', ...characterCols, 'actions', 'preview'];
+    if (type === 'scene') return ['name', 'setting', 'lighting', 'atmosphere', ...sceneCols, 'actions', 'preview'];
+    if (type === 'prop') return ['name', 'description', 'usage', ...propCols, 'actions', 'preview'];
+    return ['index', 'shot', 'narration', 'subtitles', 'visual', ...storyboardCols, 'actions', 'preview', 'videoPrompt'];
+  }
+
+  const renderTableTd = (type: "storyboard" | "character" | "scene" | "prop", i: number, col: string, className: string, children: React.ReactNode) => {
+    const key = `${type}_${i}_${col}`;
+    if (hiddenCells.has(key)) return null;
+    const merges = mergedCells[key] || { rowSpan: 1, colSpan: 1 };
+    
+    // Check if within selection
+    const colOrder = getTableColOrder(type);
+    let isSelected = false;
+    if (selection && selection.type === type) {
+      const startColIdx = colOrder.indexOf(selection.startCol);
+      const endColIdx = colOrder.indexOf(selection.endCol);
+      const curColIdx = colOrder.indexOf(col);
+      const minRow = Math.min(selection.startRow, selection.endRow);
+      const maxRow = Math.max(selection.startRow, selection.endRow);
+      const minCol = Math.min(startColIdx, endColIdx);
+      const maxCol = Math.max(startColIdx, endColIdx);
+      
+      if (
+        i >= minRow && i <= maxRow &&
+        curColIdx >= minCol && curColIdx <= maxCol
+      ) {
+        isSelected = true;
+      }
+    }
+
+    return (
+      <td
+        key={col}
+        rowSpan={merges.rowSpan}
+        colSpan={merges.colSpan}
+        className={`${className} cursor-cell transition-colors ${isSelected ? 'bg-blue-100 ring-2 ring-blue-500 ring-inset z-10' : ''}`}
+        style={{ padding: `${tablePadding}px` }}
+        onMouseDown={(e) => {
+          if (e.button === 0) {
+            setIsSelecting(true);
+            setSelection({ type, startRow: i, startCol: col, endRow: i, endCol: col });
+          }
+        }}
+        onMouseEnter={() => {
+          if (isSelecting && selection && selection.type === type) {
+            setSelection({ ...selection, endRow: i, endCol: col });
+          }
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setContextMenu({ type, x: e.clientX, y: e.clientY, row: i, col, visible: true });
+        }}
+      >
+        {children}
+      </td>
+    );
   };
 
   return (
@@ -2121,20 +2335,33 @@ export default function App() {
                 </div>
               </div>
 
-              <button
-                onClick={() => onAnalyze()}
-                disabled={isAnalyzing || (!script.trim() && !uploadedScriptFile?.file)}
-                className="w-full py-3 bg-[var(--accent)] text-black rounded font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-4 shadow-[0_0_15px_rgba(205,255,0,0.15)] flex justify-center items-center gap-2"
-              >
-                {isAnalyzing ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    <span>{genStatus || "AI 分析中..."}</span>
-                  </>
-                ) : (
-                  "开始智能分析"
+              <div className="flex gap-2 w-full mt-4">
+                <button
+                  onClick={() => onAnalyze()}
+                  disabled={isAnalyzing || (!script.trim() && !uploadedScriptFile?.file)}
+                  className="flex-1 py-3 bg-[var(--accent)] text-black rounded font-bold text-sm uppercase tracking-widest hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_15px_rgba(205,255,0,0.15)] flex justify-center items-center gap-2"
+                >
+                  {isAnalyzing ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span>{genStatus || "AI 分析中..."}</span>
+                    </>
+                  ) : (
+                    "开始智能分析"
+                  )}
+                </button>
+                {isAnalyzing && (
+                  <button
+                    onClick={() => { 
+                      cancelAnalysisRef.current = true; 
+                      cancelAnalysisControllerRef.current?.abort();
+                    }}
+                    className="w-24 py-3 bg-red-600/80 text-white rounded font-bold text-sm uppercase hover:bg-red-500 transition-all flex justify-center items-center"
+                  >
+                    取消
+                  </button>
                 )}
-              </button>
+              </div>
 
               <div className="bg-[#1a1c1f] border border-[var(--border)] p-3 rounded mt-4">
                 <div className="text-xs uppercase font-bold text-[var(--accent)] tracking-[0.2em] mb-3">
@@ -2237,6 +2464,14 @@ export default function App() {
                           className="text-[var(--accent)] bg-[#111]"
                         >
                           即梦 Dreamina (T2I)
+                        </option>
+                      )}
+                      {apiKeys.doubao && (
+                        <option
+                          value="doubao"
+                          className="text-[var(--accent)] bg-[#111]"
+                        >
+                          字节豆包 (Doubao T2I)
                         </option>
                       )}
                       {apiKeys.kling && (
@@ -2629,7 +2864,7 @@ export default function App() {
                   localWorkflows={localWorkflows}
                 />
               </motion.div>
-            ) : isAnalyzing || (!results && !rawAnalysisText) ? (
+            ) : (!results && !rawAnalysisText) ? (
               <motion.div
                 key="empty"
                 initial={{ opacity: 0 }}
@@ -2709,6 +2944,15 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="space-y-8"
               >
+                {isAnalyzing && (
+                  <div className="bg-[var(--accent)]/10 border border-[var(--accent)]/30 rounded p-3 text-[var(--accent)] text-sm flex items-center gap-3 w-full animate-pulse mx-auto max-w-6xl shadow-[0_0_15px_rgba(205,255,0,0.1)]">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <div>
+                      <strong>{genStatus || "AI 正在后续片段深度拆解中..."}</strong>
+                      <span className="opacity-80 ml-2 text-xs">正在实时呈现目前阶段的结果，请勿操作！</span>
+                    </div>
+                  </div>
+                )}
                 {activeTab === "analysis" && (
                   <div 
                     className="transition-all duration-300 ease-out"
@@ -2944,10 +3188,7 @@ export default function App() {
                                   className="border-b border-gray-300 relative"
                                   style={{ height: characterRowHeights[i] ? `${characterRowHeights[i]}px` : 'auto' }}
                                 >
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  {renderTableTd("character", i, 'name', 'border-r border-black p-0 relative', (
                                     <input
                                       className="w-full bg-transparent outline-none font-bold"
                                       value={char.name}
@@ -2959,19 +3200,8 @@ export default function App() {
                                         )
                                       }
                                     />
-                                    {/* Horizontal resize handle */}
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  ))}
+                                  {renderTableTd("character", i, 'description', 'border-r border-black p-0 relative', (
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                       value={char.description}
@@ -2983,23 +3213,8 @@ export default function App() {
                                         )
                                       }
                                     />
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'description')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  ))}
+                                  {renderTableTd("character", i, 'clothing', 'border-r border-black p-0 relative', (
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                       value={char.clothing}
@@ -3011,23 +3226,8 @@ export default function App() {
                                         )
                                       }
                                     />
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'clothing')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  ))}
+                                  {renderTableTd("character", i, 'makeup', 'border-r border-black p-0 relative', (
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                       value={char.makeup}
@@ -3039,25 +3239,9 @@ export default function App() {
                                         )
                                       }
                                     />
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'makeup')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
+                                  ))}
                                   {characterCols.map((col) => (
-                                    <td
-                                      key={col}
-                                      className="border-r border-black p-0"
-                                      style={{ padding: `${tablePadding}px` }}
-                                    >
+                                    renderTableTd("character", i, col, 'border-r border-black p-0 relative', (
                                       <textarea
                                         className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                         value={char[col] || ""}
@@ -3069,24 +3253,9 @@ export default function App() {
                                           )
                                         }
                                       />
-                                      {/* Resizers */}
-                                      <div 
-                                        className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                        onMouseDown={(e) => handleColResizeStart(e, 'character', col)}
-                                      />
-                                      <div 
-                                        className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                        onMouseDown={(e) => {
-                                          const rowEl = e.currentTarget.closest('tr');
-                                          if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
-                                        }}
-                                      />
-                                    </td>
+                                    ))
                                   ))}
-                                  <td
-                                    className="border-r border-black no-print align-middle text-center relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  {renderTableTd("character", i, 'actions', 'border-r border-black no-print align-middle text-center relative', (
                                     <div className="flex flex-col gap-1">
                                       <button
                                         onClick={() =>
@@ -3133,53 +3302,31 @@ export default function App() {
                                         )}
                                       </button>
                                     </div>
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'actions')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td className="p-1 bg-gray-50 flex items-center justify-center relative min-h-[100px]">
-                                    {metaImages[`character-${i}`] ? (
-                                      <div
-                                        className="relative group cursor-zoom-in"
-                                        onClick={() =>
-                                          setPreviewFrameIndex(20000 + i)
-                                        }
-                                      >
-                                        <img
-                                          src={metaImages[`character-${i}`]}
-                                          className="max-h-[100px] object-contain transition-transform group-hover:scale-105"
-                                        />
-                                        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                          <Maximize2 className="text-white w-4 h-4" />
+                                  ))}
+                                  {renderTableTd("character", i, 'preview', 'p-1 bg-gray-50 flex items-center justify-center relative min-h-[100px]', (
+                                    <>
+                                      {metaImages[`character-${i}`] ? (
+                                        <div
+                                          className="relative group cursor-zoom-in"
+                                          onClick={() =>
+                                            setPreviewFrameIndex(20000 + i)
+                                          }
+                                        >
+                                          <img
+                                            src={metaImages[`character-${i}`]}
+                                            className="max-h-[100px] object-contain transition-transform group-hover:scale-105"
+                                          />
+                                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                            <Maximize2 className="text-white w-4 h-4" />
+                                          </div>
                                         </div>
-                                      </div>
-                                    ) : (
-                                      <div className="text-[8px] text-gray-400 italic">
-                                        待生成
-                                      </div>
-                                    )}
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'character', 'preview')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'character', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
+                                      ) : (
+                                        <div className="text-[8px] text-gray-400 italic">
+                                          待生成
+                                        </div>
+                                      )}
+                                    </>
+                                  ))}
                                 </tr>
                               ))}
                             </tbody>
@@ -3306,10 +3453,7 @@ export default function App() {
                                   className="border-b border-gray-300 relative"
                                   style={{ height: sceneRowHeights[i] ? `${sceneRowHeights[i]}px` : 'auto' }}
                                 >
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  {renderTableTd("scene", i, 'name', 'border-r border-black p-0 relative', (
                                     <input
                                       className="w-full bg-transparent outline-none font-bold"
                                       value={scene.name}
@@ -3317,19 +3461,8 @@ export default function App() {
                                         updateScene(i, "name", e.target.value)
                                       }
                                     />
-                                    {/* Horizontal resize handle */}
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  ))}
+                                  {renderTableTd("scene", i, 'setting', 'border-r border-black p-0 relative', (
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                       value={scene.setting}
@@ -3341,23 +3474,8 @@ export default function App() {
                                         )
                                       }
                                     />
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'setting')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  ))}
+                                  {renderTableTd("scene", i, 'lighting', 'border-r border-black p-0 relative', (
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                       value={scene.lighting || ""}
@@ -3369,23 +3487,8 @@ export default function App() {
                                         )
                                       }
                                     />
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'lighting')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  ))}
+                                  {renderTableTd("scene", i, 'atmosphere', 'border-r border-black p-0 relative', (
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                       value={scene.atmosphere || ""}
@@ -3397,25 +3500,9 @@ export default function App() {
                                         )
                                       }
                                     />
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'atmosphere')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
+                                  ))}
                                   {sceneCols.map((col) => (
-                                    <td
-                                      key={col}
-                                      className="border-r border-black p-0 relative"
-                                      style={{ padding: `${tablePadding}px` }}
-                                    >
+                                    renderTableTd("scene", i, col, 'border-r border-black p-0 relative', (
                                       <textarea
                                         className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                         value={scene[col] || ""}
@@ -3427,24 +3514,9 @@ export default function App() {
                                           )
                                         }
                                       />
-                                      {/* Resizers */}
-                                      <div 
-                                        className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                        onMouseDown={(e) => handleColResizeStart(e, 'scene', col)}
-                                      />
-                                      <div 
-                                        className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                        onMouseDown={(e) => {
-                                          const rowEl = e.currentTarget.closest('tr');
-                                          if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
-                                        }}
-                                      />
-                                    </td>
+                                    ))
                                   ))}
-                                  <td
-                                    className="border-r border-black no-print align-middle text-center relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  {renderTableTd("scene", i, 'actions', 'border-r border-black no-print align-middle text-center relative', (
                                     <div className="flex flex-col gap-1">
                                       <button
                                         onClick={() =>
@@ -3482,53 +3554,31 @@ export default function App() {
                                         )}
                                       </button>
                                     </div>
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'actions')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td className="p-1 bg-gray-50 flex items-center justify-center relative min-h-[100px]">
-                                    {metaImages[`scene-${i}`] ? (
-                                      <div
-                                        className="relative group cursor-zoom-in"
-                                        onClick={() =>
-                                          setPreviewFrameIndex(11000 + i)
-                                        }
-                                      >
-                                        <img
-                                          src={metaImages[`scene-${i}`]}
-                                          className="max-h-[100px] object-contain transition-transform group-hover:scale-105"
-                                        />
-                                        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                          <Maximize2 className="text-white w-4 h-4" />
+                                  ))}
+                                  {renderTableTd("scene", i, 'preview', 'p-1 bg-gray-50 flex items-center justify-center relative min-h-[100px]', (
+                                    <>
+                                      {metaImages[`scene-${i}`] ? (
+                                        <div
+                                          className="relative group cursor-zoom-in"
+                                          onClick={() =>
+                                            setPreviewFrameIndex(11000 + i)
+                                          }
+                                        >
+                                          <img
+                                            src={metaImages[`scene-${i}`]}
+                                            className="max-h-[100px] object-contain transition-transform group-hover:scale-105"
+                                          />
+                                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                            <Maximize2 className="text-white w-4 h-4" />
+                                          </div>
                                         </div>
-                                      </div>
-                                    ) : (
-                                      <div className="text-[8px] text-gray-400 italic">
-                                        待生成
-                                      </div>
-                                    )}
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'scene', 'preview')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'scene', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
+                                      ) : (
+                                        <div className="text-[8px] text-gray-400 italic">
+                                          待生成
+                                        </div>
+                                      )}
+                                    </>
+                                  ))}
                                 </tr>
                               ))}
                             </tbody>
@@ -3646,10 +3696,7 @@ export default function App() {
                                   className="border-b border-gray-300 relative"
                                   style={{ height: propRowHeights[i] ? `${propRowHeights[i]}px` : 'auto' }}
                                 >
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  {renderTableTd("prop", i, 'name', 'border-r border-black p-0 relative', (
                                     <input
                                       className="w-full bg-transparent outline-none font-bold"
                                       value={prop.name}
@@ -3657,19 +3704,8 @@ export default function App() {
                                         updateProp(i, "name", e.target.value)
                                       }
                                     />
-                                    {/* Horizontal resize handle */}
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  ))}
+                                  {renderTableTd("prop", i, 'description', 'border-r border-black p-0 relative', (
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                       value={prop.description}
@@ -3681,23 +3717,8 @@ export default function App() {
                                         )
                                       }
                                     />
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'prop', 'description')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td
-                                    className="border-r border-black p-0 relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  ))}
+                                  {renderTableTd("prop", i, 'usage', 'border-r border-black p-0 relative', (
                                     <textarea
                                       className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                       value={prop.usage}
@@ -3705,25 +3726,9 @@ export default function App() {
                                         updateProp(i, "usage", e.target.value)
                                       }
                                     />
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'prop', 'usage')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
+                                  ))}
                                   {propCols.map((col) => (
-                                    <td
-                                      key={col}
-                                      className="border-r border-black p-0 relative"
-                                      style={{ padding: `${tablePadding}px` }}
-                                    >
+                                    renderTableTd("prop", i, col, 'border-r border-black p-0 relative', (
                                       <textarea
                                         className="w-full bg-transparent outline-none min-h-[60px] resize-none"
                                         value={prop[col] || ""}
@@ -3735,24 +3740,9 @@ export default function App() {
                                           )
                                         }
                                       />
-                                      {/* Resizers */}
-                                      <div 
-                                        className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                        onMouseDown={(e) => handleColResizeStart(e, 'prop', col)}
-                                      />
-                                      <div 
-                                        className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                        onMouseDown={(e) => {
-                                          const rowEl = e.currentTarget.closest('tr');
-                                          if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
-                                        }}
-                                      />
-                                    </td>
+                                    ))
                                   ))}
-                                  <td
-                                    className="border-r border-black no-print align-middle text-center relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
+                                  {renderTableTd("prop", i, 'actions', 'border-r border-black no-print align-middle text-center relative', (
                                     <div className="flex flex-col gap-1">
                                       <button
                                         onClick={() =>
@@ -3790,53 +3780,31 @@ export default function App() {
                                         )}
                                       </button>
                                     </div>
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'prop', 'actions')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
-                                  <td className="p-1 bg-gray-50 flex items-center justify-center relative min-h-[100px]">
-                                    {metaImages[`prop-${i}`] ? (
-                                      <div
-                                        className="relative group cursor-zoom-in"
-                                        onClick={() =>
-                                          setPreviewFrameIndex(12000 + i)
-                                        }
-                                      >
-                                        <img
-                                          src={metaImages[`prop-${i}`]}
-                                          className="max-h-[100px] object-contain transition-transform group-hover:scale-105"
-                                        />
-                                        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                          <Maximize2 className="text-white w-4 h-4" />
+                                  ))}
+                                  {renderTableTd("prop", i, 'preview', 'p-1 bg-gray-50 flex items-center justify-center relative min-h-[100px]', (
+                                    <>
+                                      {metaImages[`prop-${i}`] ? (
+                                        <div
+                                          className="relative group cursor-zoom-in"
+                                          onClick={() =>
+                                            setPreviewFrameIndex(12000 + i)
+                                          }
+                                        >
+                                          <img
+                                            src={metaImages[`prop-${i}`]}
+                                            className="max-h-[100px] object-contain transition-transform group-hover:scale-105"
+                                          />
+                                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                            <Maximize2 className="text-white w-4 h-4" />
+                                          </div>
                                         </div>
-                                      </div>
-                                    ) : (
-                                      <div className="text-[8px] text-gray-400 italic">
-                                        待生成
-                                      </div>
-                                    )}
-                                    {/* Resizers */}
-                                    <div 
-                                      className="absolute top-0 right-[-1px] w-[3px] h-full cursor-col-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'prop', 'preview')}
-                                    />
-                                    <div 
-                                      className="absolute bottom-0 left-0 w-full h-[3px] cursor-row-resize z-10 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => {
-                                        const rowEl = e.currentTarget.closest('tr');
-                                        if (rowEl) handleRowResizeStart(e, 'prop', i, rowEl.offsetHeight);
-                                      }}
-                                    />
-                                  </td>
+                                      ) : (
+                                        <div className="text-[8px] text-gray-400 italic">
+                                          待生成
+                                        </div>
+                                      )}
+                                    </>
+                                  ))}
                                 </tr>
                               ))}
                             </tbody>
@@ -4108,156 +4076,36 @@ export default function App() {
                                     }}
                                   />
                                 </td>
-                                <td
-                                  className="border-r-2 border-black relative"
-                                  style={{ padding: `${tablePadding}px` }}
-                                >
-                                  <div className="space-y-1">
-                                    <input
-                                      className="w-full bg-transparent border-b border-gray-200 outline-none font-bold uppercase"
-                                      value={frame.shotType}
-                                      onChange={(e) =>
-                                        updateStoryboardFrame(
-                                          i,
-                                          "shotType",
-                                          e.target.value,
-                                        )
-                                      }
-                                    />
-                                    <input
-                                      className="w-full bg-transparent outline-none text-[0.8em] text-gray-500 uppercase"
-                                      value={frame.angle}
-                                      onChange={(e) =>
-                                        updateStoryboardFrame(
-                                          i,
-                                          "angle",
-                                          e.target.value,
-                                        )
-                                      }
-                                    />
-                                  </div>
-                                  {/* Resizers */}
-                                  <div 
-                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'shot')}
-                                  />
-                                  <div 
-                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => {
-                                      const rowEl = e.currentTarget.closest('tr');
-                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
-                                    }}
-                                  />
-                                </td>
-                                <td
-                                  className="border-r-2 border-black relative"
-                                  style={{ padding: `${tablePadding}px` }}
-                                >
-                                  <textarea
-                                    className="w-full bg-transparent outline-none resize-none min-h-[60px]"
-                                    value={
-                                      frame.narration || ""
-                                    }
-                                    placeholder="旁白 / 对白"
-                                    onChange={(e) =>
-                                      updateStoryboardFrame(
-                                        i,
-                                        "narration",
-                                        e.target.value,
-                                      )
-                                    }
-                                  />
-                                  {/* Resizers */}
-                                  <div 
-                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'narration')}
-                                  />
-                                  <div 
-                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => {
-                                      const rowEl = e.currentTarget.closest('tr');
-                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
-                                    }}
-                                  />
-                                </td>
-                                <td
-                                  className="border-r-2 border-black relative"
-                                  style={{ padding: `${tablePadding}px` }}
-                                >
-                                  <textarea
-                                    className="w-full bg-transparent outline-none resize-none min-h-[60px]"
-                                    value={frame.subtitles || ""}
-                                    placeholder="字幕内容 (Super)"
-                                    onChange={(e) =>
-                                      updateStoryboardFrame(
-                                        i,
-                                        "subtitles",
-                                        e.target.value,
-                                      )
-                                    }
-                                  />
-                                  {/* Resizers */}
-                                  <div 
-                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'subtitles')}
-                                  />
-                                  <div 
-                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => {
-                                      const rowEl = e.currentTarget.closest('tr');
-                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
-                                    }}
-                                  />
-                                </td>
-                                <td
-                                  className="border-r-2 border-black relative"
-                                  style={{ padding: `${tablePadding}px` }}
-                                >
-                                  <textarea
-                                    className="w-full bg-transparent outline-none resize-none min-h-[80px]"
-                                    value={frame.visualDescription}
-                                    onChange={(e) =>
-                                      updateStoryboardFrame(
-                                        i,
-                                        "visualDescription",
-                                        e.target.value,
-                                      )
-                                    }
-                                  />
-                                  {/* Resizers */}
-                                  <div 
-                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'visual')}
-                                  />
-                                  <div 
-                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => {
-                                      const rowEl = e.currentTarget.closest('tr');
-                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
-                                    }}
-                                  />
-                                </td>
-                                {storyboardCols.map((col) => (
-                                  <td
-                                    key={col}
-                                    className="border-r-2 border-black relative"
-                                    style={{ padding: `${tablePadding}px` }}
-                                  >
-                                    <textarea
-                                      className="w-full bg-transparent outline-none min-h-[60px] resize-none"
-                                      value={frame[col] || ""}
-                                      onChange={(e) =>
-                                        updateStoryboardFrame(
-                                          i,
-                                          col as any,
-                                          e.target.value,
-                                        )
-                                      }
-                                    />
+                                {renderTableTd("storyboard", i, 'shot', 'border-r-2 border-black relative', (
+                                  <>
+                                    <div className="space-y-1">
+                                      <input
+                                        className="w-full bg-transparent border-b border-gray-200 outline-none font-bold uppercase"
+                                        value={frame.shotType}
+                                        onChange={(e) =>
+                                          updateStoryboardFrame(
+                                            i,
+                                            "shotType",
+                                            e.target.value,
+                                          )
+                                        }
+                                      />
+                                      <input
+                                        className="w-full bg-transparent outline-none text-[0.8em] text-gray-500 uppercase"
+                                        value={frame.angle}
+                                        onChange={(e) =>
+                                          updateStoryboardFrame(
+                                            i,
+                                            "angle",
+                                            e.target.value,
+                                          )
+                                        }
+                                      />
+                                    </div>
                                     {/* Resizers */}
                                     <div 
                                       className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                      onMouseDown={(e) => handleColResizeStart(e, 'storyboard', col)}
+                                      onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'shot')}
                                     />
                                     <div 
                                       className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
@@ -4266,8 +4114,122 @@ export default function App() {
                                         if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
                                       }}
                                     />
-                                  </td>
+                                  </>
                                 ))}
+                                {renderTableTd("storyboard", i, 'narration', 'border-r-2 border-black relative', (
+                                  <>
+                                    <textarea
+                                      className="w-full bg-transparent outline-none resize-none min-h-[60px]"
+                                      value={
+                                        frame.narration || ""
+                                      }
+                                      placeholder="旁白 / 对白"
+                                      onChange={(e) =>
+                                        updateStoryboardFrame(
+                                          i,
+                                          "narration",
+                                          e.target.value,
+                                        )
+                                      }
+                                    />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'narration')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                      }}
+                                    />
+                                  </>
+                                ))}
+                                {renderTableTd("storyboard", i, 'subtitles', 'border-r-2 border-black relative', (
+                                  <>
+                                    <textarea
+                                      className="w-full bg-transparent outline-none resize-none min-h-[60px]"
+                                      value={frame.subtitles || ""}
+                                      placeholder="字幕内容 (Super)"
+                                      onChange={(e) =>
+                                        updateStoryboardFrame(
+                                          i,
+                                          "subtitles",
+                                          e.target.value,
+                                        )
+                                      }
+                                    />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'subtitles')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                      }}
+                                    />
+                                  </>
+                                ))}
+                                {renderTableTd("storyboard", i, 'visual', 'border-r-2 border-black relative', (
+                                  <>
+                                    <textarea
+                                      className="w-full bg-transparent outline-none resize-none min-h-[80px]"
+                                      value={frame.visualDescription}
+                                      onChange={(e) =>
+                                        updateStoryboardFrame(
+                                          i,
+                                          "visualDescription",
+                                          e.target.value,
+                                        )
+                                      }
+                                    />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'visual')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                      }}
+                                    />
+                                  </>
+                                ))}
+                                {storyboardCols.map((col) => {
+                                  return renderTableTd("storyboard", i, col, 'border-r-2 border-black relative', (
+                                    <>
+                                      <textarea
+                                        className="w-full bg-transparent outline-none min-h-[60px] resize-none"
+                                        value={frame[col] || ""}
+                                        onChange={(e) =>
+                                          updateStoryboardFrame(
+                                            i,
+                                            col as any,
+                                            e.target.value,
+                                          )
+                                        }
+                                      />
+                                      {/* Resizers */}
+                                      <div 
+                                        className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                        onMouseDown={(e) => handleColResizeStart(e, 'storyboard', col)}
+                                      />
+                                      <div 
+                                        className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                        onMouseDown={(e) => {
+                                          const rowEl = e.currentTarget.closest('tr');
+                                          if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                        }}
+                                      />
+                                    </>
+                                  ));
+                                })}
                                 <td
                                   className="border-r-2 border-black no-print relative"
                                   style={{ padding: `${tablePadding}px` }}
@@ -4315,6 +4277,7 @@ export default function App() {
                                           } else if (
                                             selectedEngine === "jimeng" ||
                                             selectedEngine === "kling" ||
+                                            selectedEngine === "doubao" ||
                                             selectedEngine === "mj"
                                           ) {
                                             const key =
@@ -4408,35 +4371,34 @@ export default function App() {
                                     }}
                                   />
                                 </td>
-                                <td 
-                                  className="border-b border-black bg-gray-50 align-top relative"
-                                  style={{ padding: `${tablePadding}px` }}
-                                >
-                                  <textarea
-                                    className="w-full bg-transparent outline-none resize-none min-h-[100px] text-[0.8em] text-gray-600 font-mono"
-                                    placeholder="视频生成提示词..."
-                                    value={frame.videoPrompt || ""}
-                                    onChange={(e) =>
-                                      updateStoryboardFrame(
-                                        i,
-                                        "videoPrompt",
-                                        e.target.value,
-                                      )
-                                    }
-                                  />
-                                  {/* Resizers */}
-                                  <div 
-                                    className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'videoPrompt')}
-                                  />
-                                  <div 
-                                    className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
-                                    onMouseDown={(e) => {
-                                      const rowEl = e.currentTarget.closest('tr');
-                                      if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
-                                    }}
-                                  />
-                                </td>
+                                {renderTableTd("storyboard", i, 'videoPrompt', 'border-b border-black bg-gray-50 align-top relative', (
+                                  <>
+                                    <textarea
+                                      className="w-full bg-transparent outline-none resize-none min-h-[100px] text-[0.8em] text-gray-600 font-mono"
+                                      placeholder="视频生成提示词..."
+                                      value={frame.videoPrompt || ""}
+                                      onChange={(e) =>
+                                        updateStoryboardFrame(
+                                          i,
+                                          "videoPrompt",
+                                          e.target.value,
+                                        )
+                                      }
+                                    />
+                                    {/* Resizers */}
+                                    <div 
+                                      className="absolute top-0 right-[-2.5px] w-[5px] h-full cursor-col-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => handleColResizeStart(e, 'storyboard', 'videoPrompt')}
+                                    />
+                                    <div 
+                                      className="absolute bottom-[-2.5px] left-0 w-full h-[5px] cursor-row-resize z-20 no-print hover:bg-blue-400 select-none transition-colors"
+                                      onMouseDown={(e) => {
+                                        const rowEl = e.currentTarget.closest('tr');
+                                        if (rowEl) handleRowResizeStart(e, 'storyboard', i, rowEl.offsetHeight);
+                                      }}
+                                    />
+                                  </>
+                                ))}
                               </tr>
                             ))}
                           </tbody>
@@ -4455,6 +4417,231 @@ export default function App() {
             )}
           </AnimatePresence>
         </div>
+        
+        {/* Context Menu */}
+        {contextMenu && contextMenu.visible && (
+          <div 
+            className="fixed z-50 bg-white border border-gray-200 shadow-xl rounded py-1 w-48 text-sm text-gray-800 storyboard-context-menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100"
+              onClick={async () => {
+                const text = getCellContent(contextMenu.row, contextMenu.col);
+                await handleCopy(text);
+                setCellContent(contextMenu.row, contextMenu.col, "");
+                setContextMenu(null);
+              }}
+            >
+              剪切
+            </button>
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100"
+              onClick={async () => {
+                const text = getCellContent(contextMenu.row, contextMenu.col);
+                await handleCopy(text);
+                setContextMenu(null);
+              }}
+            >
+              复制
+            </button>
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100"
+              onClick={async () => {
+                try {
+                  let text = '';
+                  try {
+                    text = await navigator.clipboard.readText();
+                  } catch (e) {
+                    text = prompt("粘贴内容:", "") || "";
+                  }
+                  if (text) {
+                    setCellContent(contextMenu.row, contextMenu.col, text);
+                  }
+                } catch (err) {}
+                setContextMenu(null);
+              }}
+            >
+              粘贴
+            </button>
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100 text-red-600 border-t mt-1"
+              onClick={() => {
+                if (results) {
+                  const type = contextMenu.type;
+                  const keyMap: any = { storyboard: 'storyboard', character: 'characters', scene: 'scenes', prop: 'props' };
+                  const newArr = [...results[keyMap[type] as keyof typeof results] as any[]];
+                  newArr.splice(contextMenu.row, 1);
+                  setResults({ ...results, [keyMap[type]]: newArr });
+                }
+                setContextMenu(null);
+              }}
+            >
+              删除行
+            </button>
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100 text-red-600"
+              onClick={() => {
+                const type = contextMenu.type;
+                let colsMap: any = { character: characterCols, scene: sceneCols, prop: propCols, storyboard: storyboardCols };
+                if (colsMap[type].includes(contextMenu.col)) {
+                  removeColumn(type as any, contextMenu.col);
+                } else {
+                  alert("默认列无法删除");
+                }
+                setContextMenu(null);
+              }}
+            >
+              删除列
+            </button>
+            <div className="border-t my-1"></div>
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100"
+              onClick={() => {
+                if (results) {
+                  const type = contextMenu.type;
+                  const keyMap: any = { storyboard: 'storyboard', character: 'characters', scene: 'scenes', prop: 'props' };
+                  const newArr = [...results[keyMap[type] as keyof typeof results] as any[]];
+                  let newItem: any = {};
+                  if (type === 'storyboard') {
+                    const frameNum = contextMenu.row > 0 ? ((newArr[contextMenu.row].frameNumber + newArr[contextMenu.row-1].frameNumber) / 2) : (newArr[0].frameNumber - 1);
+                    newItem = { frameNumber: frameNum, visualDescription: "", composition: "" };
+                  } else {
+                    newItem = { name: "" };
+                  }
+                  newArr.splice(contextMenu.row, 0, newItem);
+                  setResults({ ...results, [keyMap[type]]: newArr });
+                }
+                setContextMenu(null);
+              }}
+            >
+              在上方增加行
+            </button>
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100"
+              onClick={() => {
+                if (results) {
+                  const type = contextMenu.type;
+                  const keyMap: any = { storyboard: 'storyboard', character: 'characters', scene: 'scenes', prop: 'props' };
+                  const newArr = [...results[keyMap[type] as keyof typeof results] as any[]];
+                  let newItem: any = {};
+                  if (type === 'storyboard') {
+                    const frameNum = contextMenu.row < newArr.length - 1 ? ((newArr[contextMenu.row].frameNumber + newArr[contextMenu.row+1].frameNumber) / 2) : (newArr[contextMenu.row].frameNumber + 1);
+                    newItem = { frameNumber: frameNum, visualDescription: "", composition: "" };
+                  } else {
+                    newItem = { name: "" };
+                  }
+                  newArr.splice(contextMenu.row + 1, 0, newItem);
+                  setResults({ ...results, [keyMap[type]]: newArr });
+                }
+                setContextMenu(null);
+              }}
+            >
+              在下方增加行
+            </button>
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100 border-t mt-1"
+              onClick={() => {
+                const type = contextMenu.type;
+                const colsMap: any = { character: characterCols, scene: sceneCols, prop: propCols, storyboard: storyboardCols };
+                const setColsMap: any = { character: setCharacterCols, scene: setSceneCols, prop: setPropCols, storyboard: setStoryboardCols };
+                const cols = colsMap[type];
+                
+                const newColName = prompt("请输入新列的名字：");
+                if (newColName && !cols.includes(newColName)) {
+                  const idx = cols.indexOf(contextMenu.col);
+                  if (idx !== -1) {
+                    const newCols = [...cols];
+                    newCols.splice(idx, 0, newColName);
+                    setColsMap[type](newCols);
+                  } else {
+                    alert("提示：因为您点选的是系统默认列，新列将被默认添加到所有自定义列的前面。");
+                    setColsMap[type]([newColName, ...cols]);
+                  }
+                }
+                setContextMenu(null);
+              }}
+            >
+              在左侧增加列
+            </button>
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100"
+              onClick={() => {
+                const type = contextMenu.type;
+                const colsMap: any = { character: characterCols, scene: sceneCols, prop: propCols, storyboard: storyboardCols };
+                const setColsMap: any = { character: setCharacterCols, scene: setSceneCols, prop: setPropCols, storyboard: setStoryboardCols };
+                const cols = colsMap[type];
+                
+                const newColName = prompt("请输入新列的名字：");
+                if (newColName && !cols.includes(newColName)) {
+                  const idx = cols.indexOf(contextMenu.col);
+                  if (idx !== -1) {
+                    const newCols = [...cols];
+                    newCols.splice(idx + 1, 0, newColName);
+                    setColsMap[type](newCols);
+                  } else {
+                    alert("提示：因为您点选的是系统默认列，新列将被默认添加到所有自定义列的最后面。");
+                    setColsMap[type]([...cols, newColName]);
+                  }
+                }
+                setContextMenu(null);
+              }}
+            >
+              在右侧增加列
+            </button>
+            <div className="border-t my-1"></div>
+            <button 
+              className="w-full text-left px-4 py-2 hover:bg-gray-100"
+              onClick={() => {
+                const type = contextMenu.type;
+                const colOrder = getTableColOrder(type);
+                let keyToMerge = `${type}_${contextMenu.row}_${contextMenu.col}`;
+                let rSpan = 1;
+                let cSpan = 1;
+
+                if (selection && selection.type === type) {
+                  const minRow = Math.min(selection.startRow, selection.endRow);
+                  const maxRow = Math.max(selection.startRow, selection.endRow);
+                  const startColIdx = colOrder.indexOf(selection.startCol);
+                  const endColIdx = colOrder.indexOf(selection.endCol);
+                  const minColIdx = Math.min(startColIdx, endColIdx);
+                  const maxColIdx = Math.max(startColIdx, endColIdx);
+
+                  if (contextMenu.row >= minRow && contextMenu.row <= maxRow && colOrder.indexOf(contextMenu.col) >= minColIdx && colOrder.indexOf(contextMenu.col) <= maxColIdx) {
+                    keyToMerge = `${type}_${minRow}_${colOrder[minColIdx]}`;
+                    rSpan = maxRow - minRow + 1;
+                    cSpan = maxColIdx - minColIdx + 1;
+                  }
+                }
+
+                if (mergedCells[keyToMerge]) {
+                  const newMerges = { ...mergedCells };
+                  delete newMerges[keyToMerge];
+                  setMergedCells(newMerges);
+                } else if (rSpan > 1 || cSpan > 1) {
+                  setMergedCells({ ...mergedCells, [keyToMerge]: { rowSpan: rSpan, colSpan: cSpan } });
+                } else {
+                  const rowSpanStr = prompt("向下合并包含几行？(输入1取消合并)", "2");
+                  const colSpanStr = prompt("向右合并包含几列？(输入1取消合并)", "1");
+                  const r = parseInt(rowSpanStr || "1");
+                  const c = parseInt(colSpanStr || "1");
+                  if ((r > 1 || c > 1) && !isNaN(r) && !isNaN(c)) {
+                    setMergedCells({ ...mergedCells, [keyToMerge]: { rowSpan: r, colSpan: c } });
+                  } else {
+                    const newMerges = { ...mergedCells };
+                    delete newMerges[keyToMerge];
+                    setMergedCells(newMerges);
+                  }
+                }
+                setSelection(null);
+                setContextMenu(null);
+              }}
+            >
+              合并 / 取消合并单元格
+            </button>
+          </div>
+        )}
       </main>
 
       {/* Image Preview Modal */}

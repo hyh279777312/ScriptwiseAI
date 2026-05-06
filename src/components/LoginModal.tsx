@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { X, RefreshCw } from "lucide-react";
+import { loginWithGoogle } from "../services/firebase";
 
 export function LoginModal({ onClose }: { onClose: () => void }) {
   const [showQr, setShowQr] = useState(false);
   const [qrTimestamp, setQrTimestamp] = useState(Date.now());
   const [countdown, setCountdown] = useState(20);
+  const [agreed, setAgreed] = useState(false);
 
   useEffect(() => {
     let timer: any;
@@ -81,12 +83,24 @@ export function LoginModal({ onClose }: { onClose: () => void }) {
           <div className="space-y-3">
             <button 
               onClick={async () => {
+                if (!agreed) {
+                  alert("请先同意服务条款与隐私政策");
+                  return;
+                }
                 try {
-                  const { loginWithGoogle } = await import("../services/firebase");
                   await loginWithGoogle();
                   onClose();
-                } catch (e) {
-                  alert("登录失败，请检查网络后再试");
+                } catch (e: any) {
+                  console.error(e);
+                  if (e?.code === 'auth/popup-closed-by-user' || e?.message?.includes('auth/popup-closed-by-user') || e?.code === 'auth/cancelled-popup-request') {
+                    // 用户自行关闭了登录弹窗，不作提示
+                    return;
+                  }
+                  if (e?.code === 'auth/unauthorized-domain') {
+                    alert(`登录失败: 当前所在域名未加入 Firebase 授权白名单。\n\n检测到您当前访问的域名为 (${window.location.hostname})，请前往 Firebase Console -> Authentication -> Settings -> Authorized domains 中将该域名或 IP 添加至白名单，即可正常联网使用。\n\n* 本应用支持部署在任何网络环境，不会固定限制在 localhost。`);
+                    return;
+                  }
+                  alert("登录失败，请检查网络后再试: " + (e.message || "未知错误"));
                 }
               }}
               className="w-full flex items-center justify-center gap-3 bg-[#111] text-white border border-[var(--border)] py-2.5 rounded font-bold hover:bg-white hover:text-black transition-colors"
@@ -101,7 +115,13 @@ export function LoginModal({ onClose }: { onClose: () => void }) {
             </button>
             
             <button 
-              onClick={() => setShowQr(true)}
+              onClick={() => {
+                if (!agreed) {
+                  alert("请先同意服务条款与隐私政策");
+                  return;
+                }
+                setShowQr(true);
+              }}
               className="w-full flex items-center justify-center gap-3 bg-[#07C160] text-white py-2.5 rounded font-bold hover:bg-[#06ad56] transition-colors"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
@@ -112,8 +132,17 @@ export function LoginModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        <div className="mt-4 pt-4 border-t border-[var(--border)] text-center">
-          <span className="text-[10px] text-[var(--text-dim)]">登录即表示您同意 服务条款 与 隐私政策</span>
+        <div className="mt-4 pt-4 border-t border-[var(--border)] text-center flex items-center justify-center gap-2">
+          <input 
+            type="checkbox" 
+            id="terms" 
+            checked={agreed} 
+            onChange={(e) => setAgreed(e.target.checked)}
+            className="w-3 h-3 accent-[var(--accent)] cursor-pointer"
+          />
+          <label htmlFor="terms" className="text-[10px] text-[var(--text-dim)] cursor-pointer select-none">
+            登录即表示您同意 <a href="#" className="underline">服务条款</a> 与 <a href="#" className="underline">隐私政策</a>
+          </label>
         </div>
       </motion.div>
     </div>

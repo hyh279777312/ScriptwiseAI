@@ -12,7 +12,7 @@ const getAiClient = (userKey?: string) => {
   if (userKey) {
     return new GoogleGenAI({ apiKey: userKey });
   }
-  return ai || new GoogleGenAI({ apiKey: "dummy" }); // dummy fallback to prevent crash, will fail on network request
+  return ai || new GoogleGenAI({ apiKey: "dummy" }); // dummy fallback
 };
 
 export interface Character {
@@ -115,7 +115,12 @@ export async function optimizeEntityPrompt(
       const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: modelName, prompt: prompt, stream: false }),
+        body: JSON.stringify({ 
+          model: modelName, 
+          prompt: prompt + "\n\n【极其关键/绝对禁止】：严禁输出任何思考过程（如<think>标签等）、推理过程、或解释性文字。必须直接输出纯粹的优化结果内容！", 
+          system: "你必须直接返回优化后的文本结果，绝对禁止输出任何思考过程、<think>标签或解释性文本！",
+          stream: false 
+        }),
       });
       if (!response.ok) throw new Error(`Ollama 优化失败: ${response.statusText}`);
       const result = await response.json();
@@ -192,7 +197,8 @@ export async function optimizeStoryboardPrompt(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: modelName,
-          prompt: prompt,
+          prompt: prompt + "\n\n【极其关键/绝对禁止】：严禁输出任何思考过程（如<think>标签等）、推理过程、或解释性文字。必须直接输出纯粹的优化结果内容！", 
+          system: "你必须直接返回优化后的文本结果，绝对禁止输出任何思考过程、<think>标签或解释性文本！",
           stream: false,
         }),
       });
@@ -236,7 +242,7 @@ export async function optimizeStoryboardPrompt(
   }
 }
 
-export async function analyzeScript(script: string, referenceImages?: string[], customApiKey?: string): Promise<AnalysisResult> {
+export async function analyzeScript(script: string, referenceImages?: string[], customApiKey?: string, signal?: AbortSignal): Promise<AnalysisResult> {
   const model = "gemini-3.1-pro-preview"; // Using the best available Pro model for analysis
   const currentAi = getAiClient(customApiKey);
   
@@ -377,7 +383,8 @@ export async function analyzeScript(script: string, referenceImages?: string[], 
 export async function analyzeOllamaScript(
   baseUrl: string,
   modelName: string,
-  script: string
+  script: string,
+  signal?: AbortSignal
 ): Promise<{ text: string, parsed: AnalysisResult | null }> {
   try {
     const prompt = `
@@ -404,7 +411,7 @@ export async function analyzeOllamaScript(
 9. 严禁概括剧情。针对每一个细微动作变化或对话推进都生成独立分镜。如果文案信息量大，几句话就拆出10+个分镜。分镜数量必须铺满整个文案！
 10. 【图生视频提示词】：生成 videoPrompt，精确描写动态。
 
-【重要】你的输出必须且只能为纯粹的JSON（不要用Markdown格式），完全匹配以下结构：
+【极其关键/绝对禁止】：严禁输出任何思考过程（如<think>标签等）、推理过程、解释性文字以及Markdown格式（如 \`\`\`json 和 \`\`\`）。这会导致系统崩溃！必须直接输出纯粹的大括号开始的JSON字符串。你的输出必须且只能为纯粹的JSON，完全匹配以下结构：
 {
   "characters": [{ "name": "...", "description": "...", "clothing": "...", "makeup": "..." }],
   "props": [{ "name": "...", "description": "...", "usage": "..." }],
@@ -419,9 +426,11 @@ ${script}
     const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: signal,
       body: JSON.stringify({
         model: modelName,
         prompt: prompt,
+        system: "你是一个只能输出JSON数据的机器。你必须直接返回纯粹的JSON字符串，绝对禁止输出任何思考过程、<think>标签、解释性文本或Markdown反引号！",
         stream: false,
         format: "json",
         options: {
@@ -436,7 +445,12 @@ ${script}
     }
 
     const result = await response.json();
-    const resultText = result.response;
+    let resultText = result.response;
+    
+    // Remove think tags if they still appear
+    if (resultText) {
+      resultText = resultText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    }
 
     if (resultText && typeof resultText === "string") {
       try {
@@ -673,7 +687,8 @@ export async function generateComfyUIFrame(
 export async function analyzeScriptWithOtherLLM(
   script: string, 
   engine: "gpt" | "doubao",
-  apiKey: string
+  apiKey: string,
+  signal?: AbortSignal
 ): Promise<AnalysisResult> {
   const prompt = `
 你是一位专业的导演和分镜师。本系统已将长剧本切割为数个片段，请分析当前给到的剧本片段，提取角色、场景、道具，并生成一个专业的分镜矩阵。
@@ -741,6 +756,7 @@ ${script}
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`
       },
+      signal: signal,
       body: JSON.stringify({
         model: modelMap[engine],
         messages: [{ role: "user", content: prompt }],
@@ -763,7 +779,7 @@ ${script}
  */
 export async function generateWithOtherImageEngine(
   description: string,
-  engine: "jimeng" | "kling" | "mj",
+  engine: "jimeng" | "kling" | "mj" | "doubao",
   apiKey: string,
   aspectRatio: string = "16:9"
 ): Promise<string> {
@@ -773,25 +789,35 @@ export async function generateWithOtherImageEngine(
   const prompt = description;
   
   // 示意端点
-  const endpointMap = {
+  const endpointMap: Record<string, string> = {
     jimeng: "https://api.dreamina.com/v1/gen/t2i",
     kling: "https://api.klingai.com/v1/images/generations",
+    doubao: "https://ark.cn-beijing.volces.com/api/v3/images/generations",
     mj: "https://api.mj-proxy.com/v1/mj/submit/imagine" // 假设是一个中转类 API
   };
 
   try {
     // 统一以 MJ 中转格式为例，或按需细化
+    let requestBody: any = {
+      prompt: prompt,
+      aspect_ratio: aspectRatio,
+      engine: engine
+    };
+
+    if (engine === "doubao") {
+      requestBody = {
+        model: "doubao-image", // Doubao image model identifier, could be something else depending on user's endpoint
+        prompt: prompt
+      };
+    }
+
     const res = await fetch(endpointMap[engine], {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        prompt: prompt,
-        aspect_ratio: aspectRatio,
-        engine: engine
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!res.ok) throw new Error(`${engine} 生成请求失败: ${res.statusText}`);
@@ -896,4 +922,23 @@ export async function generateGridImage(
   }
 
   throw new Error("Grid image generation failed");
+}
+
+export async function unloadOllamaModel(baseUrl: string, modelName: string): Promise<void> {
+  try {
+    await fetch(`${baseUrl.replace(/\/$/, '')}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: modelName,
+        keep_alive: 0,
+        stream: false
+      }),
+    });
+    console.log(`Ollama model ${modelName} unloaded to free memory`);
+  } catch (error: any) {
+    if (error && error.message !== "Failed to fetch") {
+      console.warn("Could not unload Ollama model", error);
+    }
+  }
 }
