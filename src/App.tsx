@@ -47,7 +47,6 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { jsPDF } from "jspdf";
 import html2canvas from "html2canvas";
-import { saveAs } from "file-saver";
 import {
   Download,
   Maximize2,
@@ -487,18 +486,15 @@ export default function App() {
       finalPrompt = `[${layoutMode}] ${finalPrompt}`;
     }
 
-    // 智能划分一致性信息 (角色、场景、道具)
     const context = getProjectContext();
-    if (context) {
-      finalPrompt = `${finalPrompt}\n\n[Consistency Context]: ${context}`;
-    }
 
-    // 尾部注入：全局风格, 提示词设置中的自定义风格, 比例
     const globalSettings = [globalStyle, customStyle, aspectRatio]
       .filter(Boolean)
       .join(", ");
-    if (globalSettings)
-      finalPrompt = `${finalPrompt}\n\n[Style & Output]: ${globalSettings}`;
+
+    if (context || globalSettings) {
+      finalPrompt = `[Visual Style & Art Direction]: ${globalSettings}\n[Entity Consistency Context (Always enforce these designs if mentioned)]: ${context}\n\n[Core Content]: ${finalPrompt}`;
+    }
 
     return finalPrompt;
   };
@@ -887,7 +883,18 @@ export default function App() {
         heightLeft -= pdfHeight;
       }
 
-      pdf.save(`${projectName || "script_export"}_${activeTab}.pdf`);
+      const pdfBlob = pdf.output("blob");
+      const url = window.URL.createObjectURL(pdfBlob);
+      const a = document.createElement("a");
+      a.style.display = "none";
+      a.href = url;
+      a.download = `${projectName || "script_export"}_${activeTab}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      }, 100);
     } catch (err: any) {
       console.error("PDF export failed", err);
       // Detailed error alert
@@ -899,117 +906,137 @@ export default function App() {
 
   const handleExportWord = async () => {
     const originalScale = zoomScale;
-    setZoomScale(1);
-    await new Promise(r => setTimeout(r, 400));
+    try {
+      setZoomScale(1);
+      await new Promise(r => setTimeout(r, 400));
 
-    const id = activeTab === "analysis" ? "analysis-export-container" : "storyboard-export-container";
-    const element = document.getElementById(id);
-    if (!element) {
-      setZoomScale(originalScale);
-      return;
-    }
-
-    const clone = element.cloneNode(true) as HTMLElement;
-    
-    // SYNC INPUT VALUES & SET EXPLICIT WIDTHS
-    const originalCells = element.querySelectorAll('th, td');
-    const cloneCells = clone.querySelectorAll('th, td');
-    
-    const originalInputs = element.querySelectorAll('input, textarea');
-    const cloneInputs = clone.querySelectorAll('input, textarea');
-    
-    // Replace inputs with spans
-    originalInputs.forEach((input, idx) => {
-      const val = (input as HTMLInputElement | HTMLTextAreaElement).value;
-      const span = document.createElement('span');
-      span.innerText = val;
-      if (input.tagName === 'TEXTAREA') {
-        span.style.whiteSpace = 'pre-wrap';
-        span.style.display = 'block';
-        span.style.width = '100%';
-      } else {
-        span.style.display = 'inline-block';
-        span.style.width = '100%';
+      const id = activeTab === "analysis" ? "analysis-export-container" : "storyboard-export-container";
+      const element = document.getElementById(id);
+      if (!element) {
+        throw new Error("未找到导出内容容器");
       }
-      if (cloneInputs[idx] && cloneInputs[idx].parentNode) {
-        cloneInputs[idx].parentNode!.replaceChild(span, cloneInputs[idx]);
-      }
-    });
 
-    // Set explicit width attributes for all table cells based on their computed/style widths
-    originalCells.forEach((cell, idx) => {
-      const rect = cell.getBoundingClientRect();
-      const width = Math.round(rect.width);
-      if (cloneCells[idx]) {
-        (cloneCells[idx] as HTMLElement).setAttribute('width', width.toString());
-        (cloneCells[idx] as HTMLElement).style.width = `${width}px`;
-      }
-    });
-
-    clone.querySelectorAll('.no-print').forEach(el => el.remove());
-    
-    const images = clone.getElementsByTagName('img');
-    for (let i = 0; i < images.length; i++) {
-        const img = images[i];
-        
-        // Match image width to parent container for Word
-        const parentCell = img.closest('td, th');
-        if (parentCell) {
-          const cellWidth = parseInt(parentCell.getAttribute('width') || '300');
-          img.setAttribute('width', Math.min(cellWidth - 20, 480).toString());
+      const clone = element.cloneNode(true) as HTMLElement;
+      
+      // SYNC INPUT VALUES & SET EXPLICIT WIDTHS
+      const originalCells = element.querySelectorAll('th, td');
+      const cloneCells = clone.querySelectorAll('th, td');
+      
+      const originalInputs = element.querySelectorAll('input, textarea');
+      const cloneInputs = clone.querySelectorAll('input, textarea');
+      
+      // Replace inputs with spans
+      originalInputs.forEach((input, idx) => {
+        const val = (input as HTMLInputElement | HTMLTextAreaElement).value;
+        const span = document.createElement('span');
+        span.innerText = val;
+        if (input.tagName === 'TEXTAREA') {
+          span.style.whiteSpace = 'pre-wrap';
+          span.style.display = 'block';
+          span.style.width = '100%';
         } else {
-          img.setAttribute('width', '350');
+          span.style.display = 'inline-block';
+          span.style.width = '100%';
         }
+        if (cloneInputs[idx] && cloneInputs[idx].parentNode) {
+          cloneInputs[idx].parentNode!.replaceChild(span, cloneInputs[idx]);
+        }
+      });
 
-        if (img.src && !img.src.startsWith('data:')) {
-            try {
-                const response = await fetch(img.src, { mode: 'cors' });
-                const blob = await response.blob();
-                const reader = new FileReader();
-                const base64 = await new Promise<string>((resolve) => {
-                    reader.onloadend = () => resolve(reader.result as string);
-                    reader.readAsDataURL(blob);
-                });
-                img.src = base64;
-            } catch (e) {
-                console.warn("Failed to embed image in Word export", e);
-            }
+      // Set explicit width attributes for all table cells based on their computed/style widths
+      originalCells.forEach((cell, idx) => {
+        const rect = cell.getBoundingClientRect();
+        const width = Math.round(rect.width);
+        if (cloneCells[idx]) {
+          (cloneCells[idx] as HTMLElement).setAttribute('width', width.toString());
+          (cloneCells[idx] as HTMLElement).style.width = `${width}px`;
         }
+      });
+
+      clone.querySelectorAll('.no-print').forEach(el => el.remove());
+      
+      const images = clone.getElementsByTagName('img');
+      for (let i = 0; i < images.length; i++) {
+          const img = images[i];
+          
+          // Match image width to parent container for Word
+          const parentCell = img.closest('td, th');
+          if (parentCell) {
+            const cellWidth = parseInt(parentCell.getAttribute('width') || '300');
+            img.setAttribute('width', Math.min(cellWidth - 20, 480).toString());
+          } else {
+            img.setAttribute('width', '350');
+          }
+
+          if (img.src && !img.src.startsWith('data:')) {
+              try {
+                  const response = await fetch(img.src, { mode: 'cors' });
+                  const blob = await response.blob();
+                  const reader = new FileReader();
+                  const base64 = await new Promise<string>((resolve) => {
+                      reader.onloadend = () => resolve(reader.result as string);
+                      reader.readAsDataURL(blob);
+                  });
+                  img.src = base64;
+              } catch (e) {
+                  console.warn("Failed to embed image in Word export", e);
+              }
+          }
+      }
+
+      const content = clone.innerHTML;
+      const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+                      <head><meta charset='utf-8'><title>Script Export</title>
+                      <!--[if gte mso 9]>
+                      <xml>
+                      <w:WordDocument>
+                      <w:View>Print</w:View>
+                      <w:Zoom>100</w:Zoom>
+                      <w:DoNotOptimizeForBrowser/>
+                      </w:WordDocument>
+                      </xml>
+                      <![endif]-->
+                      <style>
+                        @page { size: landscape; margin: 0.5in; mso-page-orientation: landscape; }
+                        body { font-family: 'SimSun', 'Microsoft YaHei', 'Arial', sans-serif; line-height: 1.4; color: black; }
+                        h1 { text-align: center; font-size: 22pt; margin-bottom: 15pt; }
+                        h2 { font-size: 16pt; margin-top: 15pt; margin-bottom: 8pt; border-bottom: 1px solid black; padding-bottom: 4px; }
+                        p { margin: 5pt 0; }
+                        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; border: 1pt solid black; table-layout: fixed; }
+                        th, td { border: 1pt solid black; padding: 6px; vertical-align: top; word-wrap: break-word; overflow: visible; }
+                        th { background-color: #f0f0f0; font-weight: bold; text-align: center; font-size: 10pt; }
+                        td { font-size: 9pt; }
+                        img { height: auto; display: block; margin: 5px auto; }
+                      </style>
+                      </head><body>`;
+      const footer = "</body></html>";
+      const sourceHTML = header + content + footer;
+
+      const blob = new Blob(["\ufeff", sourceHTML], {
+        type: "application/vnd.ms-word;charset=utf-8",
+      });
+      
+      const fileName = `${projectName || "script_export"}_${activeTab}.doc`;
+      
+      // Use standard anchor download for better Electron compatibility
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.style.display = "none";
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      }, 100);
+      
+    } catch (err: any) {
+      console.error("Word export failed", err);
+      alert(`Word 导出失败: ${err.message || "未知错误"}`);
+    } finally {
+      setZoomScale(originalScale);
     }
-
-    const content = clone.innerHTML;
-    const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-                    <head><meta charset='utf-8'><title>Script Export</title>
-                    <!--[if gte mso 9]>
-                    <xml>
-                    <w:WordDocument>
-                    <w:View>Print</w:View>
-                    <w:Zoom>100</w:Zoom>
-                    <w:DoNotOptimizeForBrowser/>
-                    </w:WordDocument>
-                    </xml>
-                    <![endif]-->
-                    <style>
-                      @page { size: landscape; margin: 0.5in; mso-page-orientation: landscape; }
-                      body { font-family: 'SimSun', 'Microsoft YaHei', 'Arial', sans-serif; line-height: 1.4; color: black; }
-                      h1 { text-align: center; font-size: 22pt; margin-bottom: 15pt; }
-                      h2 { font-size: 16pt; margin-top: 15pt; margin-bottom: 8pt; border-bottom: 1px solid black; padding-bottom: 4px; }
-                      p { margin: 5pt 0; }
-                      table { border-collapse: collapse; width: 100%; margin-bottom: 20px; border: 1pt solid black; table-layout: fixed; }
-                      th, td { border: 1pt solid black; padding: 6px; vertical-align: top; word-wrap: break-word; overflow: visible; }
-                      th { background-color: #f0f0f0; font-weight: bold; text-align: center; font-size: 10pt; }
-                      td { font-size: 9pt; }
-                      img { height: auto; display: block; margin: 5px auto; }
-                    </style>
-                    </head><body>`;
-    const footer = "</body></html>";
-    const sourceHTML = header + content + footer;
-
-    const blob = new Blob(["\ufeff", sourceHTML], {
-      type: "application/vnd.ms-word;charset=utf-8",
-    });
-    saveAs(blob, `${projectName || "script_export"}_${activeTab}.doc`);
-    setZoomScale(originalScale);
   };
 
   const getAllVisualImages = () => {
@@ -1080,7 +1107,7 @@ export default function App() {
 
   // Analysis Engine configurations
   const [analysisOllamaModel, setAnalysisOllamaModel] =
-    useState("gemma4:31b");
+    useState("qwen3-coder:30b");
 
   // Image Generation Engine configurations
 
